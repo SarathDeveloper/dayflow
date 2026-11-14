@@ -97,6 +97,9 @@ create trigger dayflow_records_before_write
 alter table public.dayflow_records enable row level security;
 
 revoke all on table public.dayflow_records from anon;
+-- Projects created before the change still hand new tables every privilege by
+-- default. Keep only what the app uses: TRUNCATE ignores row-level security.
+revoke all on table public.dayflow_records from authenticated;
 grant select, insert, update, delete on table public.dayflow_records to authenticated;
 
 drop policy if exists "Users read their own records" on public.dayflow_records;
