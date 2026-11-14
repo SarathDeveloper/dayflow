@@ -1,4 +1,4 @@
-import type { Task } from '../types';
+import type { NotificationSettings, Task } from '../types';
 import { readJson, writeJson } from './persistence';
 
 /**
@@ -78,6 +78,77 @@ export function unfinishedToday(tasks: Task[], today: string): Task[] {
 export function resolveTopTasks(plan: DailyPlanState, tasks: Task[]): Task[] {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   return plan.topTaskIds.map((id) => byId.get(id)).filter((task): task is Task => Boolean(task));
+}
+
+// ---------------------------------------------------------------------------
+// Time-aware planning
+// ---------------------------------------------------------------------------
+
+/** Planning time per weekday when none is set: 4 hours. */
+export const DEFAULT_AVAILABLE_MINUTES = 240;
+/** Estimate for a task that has none. */
+export const DEFAULT_TASK_MINUTES = 30;
+
+type AvailabilitySettings = Pick<NotificationSettings, 'availableMinutesByWeekday'>;
+
+/** Minutes available per weekday, Sunday first; missing or invalid days fall back to 4 h. */
+export function availableMinutesByWeekday(settings: AvailabilitySettings): number[] {
+  const stored = settings.availableMinutesByWeekday;
+  return Array.from({ length: 7 }, (_, day) => {
+    const value = Array.isArray(stored) ? stored[day] : undefined;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : DEFAULT_AVAILABLE_MINUTES;
+  });
+}
+
+export function availableMinutesOn(settings: AvailabilitySettings, date: string): number {
+  const [y, m, d] = date.split('-').map(Number);
+  return availableMinutesByWeekday(settings)[new Date(y, m - 1, d).getDay()];
+}
+
+export function taskMinutes(task: Task): number {
+  const estimate = task.estimatedMinutes;
+  return typeof estimate === 'number' && estimate > 0 ? Math.round(estimate) : DEFAULT_TASK_MINUTES;
+}
+
+/**
+ * Minutes already on today's plate: open tasks dated today plus extra picks
+ * (overdue or upcoming tasks that would move to today).
+ */
+export function plannedMinutes(tasks: Task[], today: string, extraIds: string[] = []): number {
+  const ids = new Set(extraIds);
+  return tasks
+    .filter((task) => !task.completed && (task.date === today || ids.has(task.id)))
+    .reduce((sum, task) => sum + taskMinutes(task), 0);
+}
+
+const BUCKET_RANK = { overdue: 0, today: 1, upcoming: 2 } as const;
+
+/**
+ * Suggested top picks: highest priority first, then overdue before today
+ * before upcoming, keeping the picks within the time available. Always
+ * suggests at least one task when there is any, even if it alone is too long.
+ */
+export function suggestTopPicks(candidates: PlanCandidates, availableMinutes: number, max = TOP_PICKS): string[] {
+  const pool = (Object.keys(BUCKET_RANK) as (keyof typeof BUCKET_RANK)[]).flatMap((bucket) =>
+    candidates[bucket].map((task) => ({ task, bucket })),
+  );
+  pool.sort(
+    (a, b) =>
+      PRIORITY_RANK[a.task.priority] - PRIORITY_RANK[b.task.priority] ||
+      BUCKET_RANK[a.bucket] - BUCKET_RANK[b.bucket] ||
+      a.task.date.localeCompare(b.task.date) ||
+      (a.task.time || '99:99').localeCompare(b.task.time || '99:99'),
+  );
+  const picks: string[] = [];
+  let used = 0;
+  for (const { task } of pool) {
+    if (picks.length >= max) break;
+    const minutes = taskMinutes(task);
+    if (picks.length > 0 && used + minutes > availableMinutes) continue;
+    picks.push(task.id);
+    used += minutes;
+  }
+  return picks;
 }
 
 export type PlanPhase = 'morning' | 'planned' | 'evening' | 'done';

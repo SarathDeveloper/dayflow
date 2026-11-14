@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Circle, Moon, Sunrise, Target } from 'lucide-react';
-import type { DiaryEntry, DiaryMood, Task } from '../types';
+import { CalendarClock, Check, CheckCircle2, Circle, Moon, Sparkles, Sunrise, Target } from 'lucide-react';
+import type { DiaryEntry, DiaryMood, NotificationSettings, Task } from '../types';
 import { DIARY_MOODS } from '../lib/diary';
 import {
   TOP_PICKS,
+  availableMinutesOn,
   loadDailyPlan,
+  plannedMinutes,
+  suggestTopPicks,
+  taskMinutes,
   planCandidates,
   planPhase,
   resolveTopTasks,
@@ -13,6 +17,8 @@ import {
   unfinishedToday,
   type DailyPlanState,
 } from '../lib/dailyPlan';
+import { formatMinutes } from '../lib/focusSessions';
+import { cn } from '../lib/cn';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 
@@ -22,6 +28,8 @@ interface DailyPlanCardProps {
   onToggleComplete: (taskId: string) => void;
   onRescheduleTasks: (taskIds: string[], change: { date?: string; time?: string }) => void;
   onSaveDiaryEntry: (partial: Partial<DiaryEntry>) => boolean;
+  /** Available planning time per weekday. */
+  settings: Pick<NotificationSettings, 'availableMinutesByWeekday'>;
 }
 
 const MOOD_EMOJI: Record<DiaryMood, string> = { great: '😄', good: '🙂', okay: '😐', low: '😕', rough: '😣' };
@@ -46,6 +54,35 @@ function dayLabel(date: string, today: string): string {
 const rowClass =
   'w-full flex items-center gap-2.5 text-left rounded-xl px-2.5 py-2 text-sm transition-colors';
 
+/** Today's load against the time available, with a nudge when it does not fit. */
+const TimeBudget: React.FC<{ planned: number; available: number }> = ({ planned, available }) => {
+  const over = planned - available;
+  const ratio = available > 0 ? Math.min(1, planned / available) : planned > 0 ? 1 : 0;
+  return (
+    <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-semibold text-slate-600 dark:text-slate-300">
+          {formatMinutes(planned)} planned
+        </span>
+        <span className="text-slate-500 dark:text-slate-400">
+          {available > 0 ? `${formatMinutes(available)} available` : 'No time set for today'}
+        </span>
+      </div>
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+        <div
+          className={cn('h-full rounded-full transition-all', over > 0 ? 'bg-amber-500' : 'bg-indigo-500')}
+          style={{ width: `${Math.round(ratio * 100)}%` }}
+        />
+      </div>
+      {over > 0 && (
+        <p className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+          Over by {formatMinutes(over)}. Move something to tomorrow to keep the day realistic.
+        </p>
+      )}
+    </div>
+  );
+};
+
 /** Morning: pick today's top 3. Evening: move what is left and write one line. */
 export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
   tasks,
@@ -53,6 +90,7 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
   onToggleComplete,
   onRescheduleTasks,
   onSaveDiaryEntry,
+  settings,
 }) => {
   const hour = useHour();
   const [plan, setPlan] = useState<DailyPlanState>(() => loadDailyPlan(today));
@@ -76,6 +114,7 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
   const unfinished = useMemo(() => unfinishedToday(tasks, today), [tasks, today]);
   const topTasks = resolveTopTasks(plan, tasks);
   const phase = planPhase(plan, hour);
+  const available = availableMinutesOn(settings, today);
 
   if (phase === 'morning') {
     const groups: [string, Task[]][] = [
@@ -109,6 +148,8 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
           </div>
         </div>
 
+        <TimeBudget planned={plannedMinutes(tasks, today, picked)} available={available} />
+
         {groups.map(([label, list]) =>
           list.length === 0 ? null : (
             <div key={label}>
@@ -119,29 +160,54 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
                 {list.slice(0, GROUP_LIMIT).map((task) => {
                   const selected = picked.includes(task.id);
                   const full = !selected && picked.length >= TOP_PICKS;
+                  const overdue = label === 'Overdue';
                   return (
-                    <button
-                      key={task.id}
-                      type="button"
-                      onClick={() => toggle(task.id)}
-                      disabled={full}
-                      aria-pressed={selected}
-                      className={`${rowClass} ${
-                        selected
-                          ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-900 dark:text-indigo-100'
-                          : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 disabled:opacity-40'
-                      }`}
-                    >
-                      {selected ? (
-                        <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                      ) : (
-                        <Circle className="w-4 h-4 text-slate-400 shrink-0" />
+                    <div key={task.id} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toggle(task.id)}
+                        disabled={full}
+                        aria-pressed={selected}
+                        className={`${rowClass} ${
+                          selected
+                            ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-900 dark:text-indigo-100'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 disabled:opacity-40'
+                        }`}
+                      >
+                        {selected ? (
+                          <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        ) : (
+                          <Circle className="w-4 h-4 text-slate-400 shrink-0" />
+                        )}
+                        <span className="flex-1 min-w-0 truncate">{task.title}</span>
+                        <span className="text-[11px] text-slate-400 shrink-0">{formatMinutes(taskMinutes(task))}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+                          {label === 'Today' ? task.time : dayLabel(task.date, today)}
+                        </span>
+                      </button>
+                      {overdue && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onRescheduleTasks([task.id], { date: tomorrowOf(today) })}
+                            className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-slate-800"
+                            title="Move to tomorrow"
+                            aria-label={`Move ${task.title} to tomorrow`}
+                          >
+                            <CalendarClock className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onToggleComplete(task.id)}
+                            className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-emerald-600 dark:hover:bg-slate-800"
+                            title="Mark done"
+                            aria-label={`Mark ${task.title} done`}
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                        </>
                       )}
-                      <span className="flex-1 min-w-0 truncate">{task.title}</span>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
-                        {label === 'Today' ? task.time : dayLabel(task.date, today)}
-                      </span>
-                    </button>
+                    </div>
                   );
                 })}
                 {list.length > GROUP_LIMIT && (
@@ -155,6 +221,16 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
         <div className="flex items-center gap-2 pt-1">
           <Button type="button" size="sm" onClick={commit} disabled={picked.length === 0}>
             Set my top {picked.length || TOP_PICKS}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setPicked(suggestTopPicks(candidates, available))}
+            title="Picks by priority and due date that fit the time you have"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Suggest for me
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => update({ ...plan, planned: true })}>
             Not today
@@ -185,6 +261,7 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
             Change
           </button>
         </div>
+        <TimeBudget planned={plannedMinutes(tasks, today)} available={available} />
         {topTasks.map((task) => (
           <button
             key={task.id}

@@ -3229,6 +3229,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 onToggleComplete={handleToggleComplete}
                 onRescheduleTasks={handleRescheduleTasks}
                 onSaveDiaryEntry={handleSaveDiaryEntry}
+                settings={settings}
               />
             )}
 
