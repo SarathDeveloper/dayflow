@@ -32,6 +32,7 @@ export const RECORD_COLLECTIONS: readonly RecordCollection[] = [
   'habitCheckIns',
   'alarms',
   'diaryEntries',
+  'focusSessions',
   'billTemplates',
   'billPayments',
 ];

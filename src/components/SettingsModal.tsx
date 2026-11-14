@@ -8,6 +8,7 @@ import { isNativeAndroid } from '../lib/platform';
 import { canUseAppLock, promptAppUnlock } from '../services/appLock';
 import { DayflowAlarm } from '../services/dayflowAlarm';
 import { CloudSyncSection } from './CloudSyncSection';
+import { ProgressSettingsSection } from './ProgressSettingsSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
 import type { ReminderReliabilityState } from './ReminderReliabilityCard';
 
@@ -415,6 +416,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Daily Progress Score and planning */}
+          <ProgressSettingsSection settings={settings} onUpdateSettings={onUpdateSettings} />
 
           {/* Cloud backup */}
           <CloudSyncSection sync={cloudSync} />

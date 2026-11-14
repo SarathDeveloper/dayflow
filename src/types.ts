@@ -72,6 +72,10 @@ export interface NotificationSettings {
   defaultSound: SoundType;
   /** Display name of the device-local song. The file itself is not synced. */
   localMusicName?: string;
+  /** Daily focus goal for the progress score, in minutes. Missing means 50. */
+  dailyFocusGoalMinutes?: number;
+  /** Time available for planned tasks, minutes per weekday (0 = Sunday … 6). Missing means 240 each. */
+  availableMinutesByWeekday?: number[];
   quietHours: {
     enabled: boolean;
     start: string; // "22:00"
@@ -183,6 +187,14 @@ export interface DiaryImage {
   dataUrl: string;
 }
 
+/** Answers to the evening review prompts. */
+export interface DiaryReflection {
+  wentWell?: string;
+  missed?: string;
+  learned?: string;
+  improve?: string;
+}
+
 /** One note. A calendar day can hold many of these. */
 export interface DiaryEntry {
   id: string;
@@ -192,6 +204,22 @@ export interface DiaryEntry {
   mood: DiaryMood;
   body: string;
   images?: DiaryImage[];
+  /** 1 (drained) … 5 (full of energy). Set by the evening review. */
+  energy?: number;
+  /** Present on the one evening-review entry of a day. */
+  reflection?: DiaryReflection;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A finished Focus Room session (breaks are not recorded). */
+export interface FocusSession {
+  id: string;
+  userId?: string;
+  date: string; // YYYY-MM-DD, local day the session ended
+  startedAt: string; // ISO
+  minutes: number;
+  taskId?: string;
   createdAt: string;
   updatedAt: string;
 }

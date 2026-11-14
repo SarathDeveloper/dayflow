@@ -9,6 +9,7 @@ import type {
   FinanceCategory,
   Debt,
   DiaryEntry,
+  FocusSession,
   FinanceTransaction,
   Goal,
   Habit,
@@ -43,6 +44,7 @@ export const BACKUP_ARRAY_KEYS = [
   'habitCheckIns',
   'alarms',
   'diaryEntries',
+  'focusSessions',
   'billTemplates',
   'billPayments',
 ] as const;
@@ -67,6 +69,7 @@ export interface BackupCollections {
   habitCheckIns: HabitCheckIn[];
   alarms: Alarm[];
   diaryEntries: DiaryEntry[];
+  focusSessions: FocusSession[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   settings: NotificationSettings;
@@ -135,6 +138,7 @@ export function buildBackup(
     habitCheckIns: input.habitCheckIns,
     alarms: input.alarms,
     diaryEntries: input.diaryEntries,
+    focusSessions: input.focusSessions ?? [],
     billTemplates: input.billTemplates,
     billPayments: input.billPayments,
     settings: input.settings,
@@ -195,8 +199,9 @@ export function parseBackup(raw: unknown): ParsedBackup {
 
   for (const key of BACKUP_ARRAY_KEYS) {
     if (full) {
-      // Older backups omit this list. Leaving it absent keeps names already saved.
-      if (key === 'financeCategories' && obj[key] === undefined) continue;
+      // Older backups omit these lists. Leaving them absent keeps what is saved
+      // (custom category names, focus sessions recorded since).
+      if ((key === 'financeCategories' || key === 'focusSessions') && obj[key] === undefined) continue;
       data[key] = (Array.isArray(obj[key]) ? obj[key] : []) as never;
       present.push(key);
     } else if (Array.isArray(obj[key])) {

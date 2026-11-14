@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm, FocusSession } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -135,6 +135,9 @@ import {
   type RingSession,
 } from './lib/alarms';
 import { hasLocalMusic } from './lib/localMusic';
+import { buildFocusSession } from './lib/focusSessions';
+import { dailyProgress, weeklyConsistency } from './lib/progressScore';
+import { TodayProgressCard } from './components/TodayProgressCard';
 import { DayflowAlarm } from './services/dayflowAlarm';
 import { clearHomeWidgets, updateHomeWidgets } from './services/homeWidgets';
 import { buildWidgetSnapshot } from './lib/widgetSnapshot';
@@ -219,6 +222,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const userHabitsKey = storageKeys.habits;
   const userHabitCheckInsKey = storageKeys.habitCheckIns;
   const userAlarmsKey = storageKeys.alarms;
+  const userFocusSessionsKey = storageKeys.focusSessions;
   const userDiaryKey = storageKeys.diaryEntries;
   const STORAGE_KEY_SETTINGS = storageKeys.settings;
 
@@ -402,6 +406,15 @@ export default function App({ skipInitialLock = false }: AppProps) {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse alarms:', e);
+    }
+    return [];
+  });
+  const [focusSessions, setFocusSessions] = useState<FocusSession[]>(() => {
+    try {
+      const saved = localStorage.getItem(userFocusSessionsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse focus sessions:', e);
     }
     return [];
   });
@@ -600,6 +613,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const savedAlarms = localStorage.getItem(userAlarmsKey);
       setAlarms(savedAlarms ? JSON.parse(savedAlarms) : []);
 
+      const savedFocusSessions = localStorage.getItem(userFocusSessionsKey);
+      setFocusSessions(savedFocusSessions ? JSON.parse(savedFocusSessions) : []);
+
       const savedDiary = localStorage.getItem(userDiaryKey);
       setDiaryEntries(savedDiary ? JSON.parse(savedDiary) : []);
 
@@ -612,7 +628,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     } finally {
       setReadyHydrationToken(String(dataEpoch));
     }
-  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   usePersistJson(userTasksKey, tasks, canPersist);
@@ -633,6 +649,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   usePersistJson(userHabitsKey, habits, canPersist);
   usePersistJson(userHabitCheckInsKey, habitCheckIns, canPersist);
   usePersistJson(userAlarmsKey, alarms, canPersist);
+  usePersistJson(userFocusSessionsKey, focusSessions, canPersist);
   usePersistJson(userDiaryKey, diaryEntries, canPersist);
   usePersistJson(userSavingsStreakKey, savingsStreak, canPersist);
 
@@ -674,6 +691,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     habits,
     habitCheckIns,
     alarms,
+    focusSessions,
     diaryEntries,
   ]);
 
@@ -919,6 +937,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habits,
       habitCheckIns,
       alarms,
+      focusSessions,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -1687,6 +1706,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habits,
       habitCheckIns,
       alarms,
+      focusSessions,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -1722,6 +1742,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (present.includes('habits')) setHabits(data.habits ?? []);
     if (present.includes('habitCheckIns')) setHabitCheckIns(data.habitCheckIns ?? []);
     if (present.includes('alarms')) setAlarms(data.alarms ?? []);
+    if (present.includes('focusSessions')) setFocusSessions(data.focusSessions ?? []);
     if (present.includes('diaryEntries')) {
       setDiaryEntries(data.diaryEntries ?? []);
       setRecentlyDeletedDiary(null);
@@ -1774,6 +1795,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habits,
       habitCheckIns,
       alarms,
+      focusSessions,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -2885,6 +2907,14 @@ export default function App({ skipInitialLock = false }: AppProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [billTemplates]);
 
+  // Daily Progress Score for the date in the date bar, and the last 7 finished days.
+  const progressInput = useMemo(
+    () => ({ tasks, habits, checkIns: habitCheckIns, goals, focusSessions, settings }),
+    [tasks, habits, habitCheckIns, goals, focusSessions, settings],
+  );
+  const dayProgress = useMemo(() => dailyProgress(progressInput, selectedDate), [progressInput, selectedDate]);
+  const weekProgress = useMemo(() => weeklyConsistency(progressInput, todayStr), [progressInput, todayStr]);
+
   // Extract all unique tags across tasks
   const allTags = Array.from(new Set(tasks.flatMap((t) => t.tags || []).filter(Boolean)));
 
@@ -2991,6 +3021,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
+            <TodayProgressCard progress={dayProgress} weekly={weekProgress} isToday={selectedDate === todayStr} />
             <TodayAlarmCard alarms={alarms} onOpen={() => setActiveTab('alarms')} />
             <TodayHabitsCard
               date={selectedDate}
@@ -3301,6 +3332,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
             initialActiveTask={focusTask}
             initialMinutes={focusMinutes}
             onCompleteTask={handleToggleComplete}
+            onSessionComplete={(session) =>
+              setFocusSessions((prev) => [buildFocusSession(session), ...prev])
+            }
           />
         )}
 

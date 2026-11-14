@@ -9,6 +9,8 @@ interface FocusRoomProps {
   /** Length of the first focus session, e.g. the minutes left in a time block. */
   initialMinutes?: number;
   onCompleteTask: (taskId: string) => void;
+  /** A focus timer (not a break) ran to zero. Recorded for the progress score and reports. */
+  onSessionComplete?: (session: { minutes: number; startedAt: Date; taskId?: string }) => void;
 }
 
 export const FocusRoom: React.FC<FocusRoomProps> = ({
@@ -16,6 +18,7 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
   initialActiveTask,
   initialMinutes,
   onCompleteTask,
+  onSessionComplete,
 }) => {
   const [selectedTaskId, setSelectedTaskId] = useState<string>(
     initialActiveTask?.id || (tasks.find((t) => !t.completed)?.id || '')
@@ -27,6 +30,16 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
   const [ambientActive, setAmbientActive] = useState<boolean>(false);
 
   const stopAmbientRef = useRef<(() => void) | null>(null);
+  // When the current timer first started; cleared when it finishes or resets.
+  const startedAtRef = useRef<Date | null>(null);
+  const onSessionCompleteRef = useRef(onSessionComplete);
+  onSessionCompleteRef.current = onSessionComplete;
+  const sessionRef = useRef({ mode, durationSec, taskId: selectedTaskId });
+  sessionRef.current = { mode, durationSec, taskId: selectedTaskId };
+
+  useEffect(() => {
+    if (isRunning && !startedAtRef.current) startedAtRef.current = new Date();
+  }, [isRunning]);
 
   useEffect(() => {
     if (initialActiveTask) {
@@ -43,6 +56,7 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
   // Mode Duration Presets
   const setTimerMode = (newMode: 'pomodoro' | 'shortBreak' | 'longBreak') => {
     setIsRunning(false);
+    startedAtRef.current = null;
     setMode(newMode);
     const secs =
       newMode === 'pomodoro' ? 25 * 60 : newMode === 'shortBreak' ? 5 * 60 : 15 * 60;
@@ -60,6 +74,16 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
     } else if (timeRemaining === 0 && isRunning) {
       setIsRunning(false);
       audioService.playSound('bell', 'Focus session finished!');
+      const finished = sessionRef.current;
+      const startedAt = startedAtRef.current;
+      startedAtRef.current = null;
+      if (finished.mode === 'pomodoro' && startedAt) {
+        onSessionCompleteRef.current?.({
+          minutes: finished.durationSec / 60,
+          startedAt,
+          taskId: finished.taskId || undefined,
+        });
+      }
       if (stopAmbientRef.current) {
         stopAmbientRef.current();
         setAmbientActive(false);
@@ -195,6 +219,8 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
           onClick={() => {
             setIsRunning(false);
             setTimeRemaining(durationSec);
+            // A reset timer is a new session; the abandoned one is not recorded.
+            startedAtRef.current = null;
           }}
           className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-sm"
           title="Reset Timer"
