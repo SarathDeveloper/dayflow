@@ -156,6 +156,7 @@ import { buildWidgetSnapshot } from './lib/widgetSnapshot';
 import { audioService } from './services/audioService';
 import { canSetCheckIn, habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
+import { useAppUpdates } from './hooks/useAppUpdates';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
@@ -467,6 +468,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const [appLocked, setAppLocked] = useState(() => isAppLockActive() && !skipInitialLock);
   const [lockError, setLockError] = useState('');
   const [nativeBootReady, setNativeBootReady] = useState(() => !isNativeAndroid());
+  // Android: silent app-code updates, and an offer when a new APK is needed.
+  useAppUpdates(nativeBootReady);
 
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [activeTab, setActiveTab] = useState<ActiveTab>('today');

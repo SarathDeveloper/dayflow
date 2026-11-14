@@ -11,6 +11,9 @@ features, setup and the Android release process.
 - `npm test`: Vitest, `src/**/*.test.ts` only (pure logic in `src/lib`)
 - `npm run lint`: `tsc --noEmit`
 - `npm run build:android`: web build + `cap sync android`
+- `npm run publish:android`: after pushing `main`, publish the Android
+  auto-update release (GitHub Release with app code zip, APK, `update.json`).
+  Needs a clean tree at `origin/main`; `-- --dry-run` builds without publishing.
 - Android Gradle needs the SDK path: `android/local.properties` (`sdk.dir=...`,
   git-ignored) or `ANDROID_HOME`. JDK 21.
 

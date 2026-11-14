@@ -170,6 +170,30 @@ npm run apk:install       # adb install -r (device must be connected)
 Without a cable, copy `android/app/build/outputs/apk/release/app-release.apk`
 to the phone and allow "Install unknown apps" for the file manager.
 
+### Auto-update for the sideloaded app
+
+```bash
+npm run publish:android             # after pushing main: build + publish a GitHub Release
+npm run publish:android -- --dry-run  # build into release-out/ without publishing
+```
+
+Each release holds the app code (`web-<version>.zip`), the APK, and
+`update.json`, the feed installed apps read from
+`releases/latest/download/update.json`.
+
+- **App code** (screens, logic, fixes) downloads silently and switches in at the
+  next app start, behind the splash screen. New code that fails to start within
+  15 s is rolled back and never retried.
+- **Android code** changes (anything under `android/`, `capacitor.config.ts`, or
+  a native plugin version) raise the APK build number; the app then offers the
+  new APK and Android asks the person to tap Install.
+- Live updates use `@capgo/capacitor-updater` in manual mode against our own
+  releases; Capgo's cloud and its stats are switched off.
+- The APK is the debug variant signed with this computer's debug key, like the
+  installed app. Publish from the same computer: Android rejects an update
+  signed with another key (switching keys means one uninstall + reinstall).
+- Settings → App updates shows the version and has "Check for updates".
+
 Notification sounds are generated once into
 `android/app/src/main/res/raw/*.wav`. Re-run
 `node scripts/generate-notification-sounds.mjs` if you want to tweak them.

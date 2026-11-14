@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Only DayflowAlarmPlugin.shareBackup uses this provider, for files it writes to
-  cache/backups/. Keep it that narrow: an external-path or a cache root would
-  let a shared URI reach far more than the one backup file.
+  DayflowAlarmPlugin.shareBackup shares files it writes to cache/backups/, and
+  DayflowUpdatePlugin hands the downloaded update in cache/updates/ to the
+  installer. Keep it that narrow: an external-path or a cache root would let a
+  shared URI reach far more than those files.
 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="backups" path="backups/" />
+    <cache-path name="updates" path="updates/" />
 </paths>

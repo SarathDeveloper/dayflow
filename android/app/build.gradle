@@ -24,9 +24,13 @@ android {
         applicationId "com.dayflow.dailytasks"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // Bump versionCode on every Play upload; keep versionName in step with package.json.
-        versionCode 2
-        versionName "1.1.0"
+        // Sideload releases: scripts/release-android.mjs passes the build number and
+        // name (-PdayflowVersionCode / -PdayflowVersionName); the number only rises
+        // when Android code changes, which is what makes phones offer the new APK.
+        // Play uploads: raise the fallback below (or pass the same properties) on
+        // every upload; Play rejects a versionCode it has already seen.
+        versionCode((project.findProperty('dayflowVersionCode') ?: '2') as Integer)
+        versionName((project.findProperty('dayflowVersionName') ?: '1.1.0') as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

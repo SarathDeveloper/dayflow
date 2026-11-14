@@ -12,7 +12,9 @@ import {
   setUpAppLock,
 } from '../services/appLock';
 import { storedAccount } from '../services/cloudSyncService';
+import { isAppUpdaterAvailable } from '../services/appUpdater';
 import { AlarmSongsSection } from './AlarmSongsSection';
+import { AppUpdatesSection } from './AppUpdatesSection';
 import { CloudSyncSection } from './CloudSyncSection';
 import { ProgressSettingsSection } from './ProgressSettingsSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
@@ -199,6 +201,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {appLockError && <p className="text-[11px] text-rose-600">{appLockError}</p>}
             </div>
           )}
+
+          {isAppUpdaterAvailable() && <AppUpdatesSection />}
 
           {/* Sound & Notifications */}
           <div className="space-y-3 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">

@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
   /** "true" shows the bank-spend inbox. Needs the native listener from feature/bank-sms-notifications. */
   readonly VITE_ENABLE_BANK_SMS?: string;
+  /** Set by scripts/release-android.mjs: the app-code version of a published release. */
+  readonly VITE_APP_BUILD?: string;
 }
 
 interface ImportMeta {

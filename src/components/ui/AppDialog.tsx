@@ -106,6 +106,17 @@ export function showAlert(options: AlertOptions | string): Promise<void> {
   }).then(() => undefined);
 }
 
+/**
+ * Shows an alert that code can close later (e.g. "Downloading…"). `close`
+ * removes exactly this alert, wherever it is in the queue, and never touches
+ * other dialogs; it does nothing once the person has closed it.
+ */
+export function openAlert(options: AlertOptions): { closed: Promise<void>; close: () => void } {
+  const id = nextId; // enqueue takes nextId synchronously
+  const closed = showAlert(options);
+  return { closed, close: () => settle(id, false) };
+}
+
 /** Asks a yes/no question. Resolves true only when the confirm button is chosen. */
 export function showConfirm(options: ConfirmOptions): Promise<boolean> {
   return enqueue({
