@@ -56,6 +56,7 @@ import {
   removeTransactionCascade,
   resolveDefaultAccountId,
   isLedgerError,
+  ledgerErrorDialog,
   nowTimeString,
   todayString,
   currentMonthKey,
@@ -74,6 +75,7 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { AppLockScreen } from './components/AppLockScreen';
 import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
+import { dismissTopDialog, setDialogsSuspended, showAlert, showConfirm } from './components/ui/AppDialog';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
 import { NotificationService } from './services/notificationService';
@@ -717,9 +719,21 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setReminderNoticeDismissed(true);
   }, []);
 
+  // Dialogs wait while the lock screen or the alarm ring screen covers the app.
+  useEffect(() => {
+    setDialogsSuspended(appLocked || Boolean(ringing));
+  }, [appLocked, ringing]);
+  useEffect(() => () => setDialogsSuspended(false), []);
+
   // Keep refs to the latest values so native listeners never capture stale data.
   const tasksRef = useRef<Task[]>(tasks);
   tasksRef.current = tasks;
+  // Handlers that await a confirmation must read these afterwards, not the
+  // values from the render that opened it: a cloud sync can land meanwhile.
+  const transactionsRef = useRef<FinanceTransaction[]>(transactions);
+  transactionsRef.current = transactions;
+  const billPaymentsRef = useRef<BillPayment[]>(billPayments);
+  billPaymentsRef.current = billPayments;
   const settingsRef = useRef<NotificationSettings>(settings);
   settingsRef.current = settings;
   const habitsRef = useRef<Habit[]>(habits);
@@ -1298,6 +1312,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
   // change leaked listeners and made one back press fire several handlers).
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
+    // An open alert or confirmation closes first, as if cancelled.
+    if (dismissTopDialog()) return;
     if (ringing) {
       finishRing('dismiss');
       return;
@@ -1716,6 +1732,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (stamped.theme) setTheme(stamped.theme);
     if (stamped.budgetAlertState) setBudgetAlertState(stamped.budgetAlertState);
   };
+  // The import confirm is async; apply with the latest render's state, not the one that opened it.
+  const applyImportedBackupRef = useRef(applyImportedBackup);
+  applyImportedBackupRef.current = applyImportedBackup;
 
   const handleChooseBackupFolder = () => {
     void chooseBackupFolder()
@@ -1770,7 +1789,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
     void save.catch((err) => {
       if (isShareCancel(err)) return;
       console.warn('Backup export failed:', err);
-      alert('Could not save the backup.');
+      void showAlert({
+        title: 'Could not save the backup',
+        message: 'Try again, or choose a different place to save it.',
+        tone: 'warning',
+      });
     });
   };
 
@@ -1781,22 +1804,39 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
+      let parsed: ParsedBackup;
       try {
         const text = String(reader.result ?? '').replace(/^\uFEFF/, '');
-        const parsed = parseBackup(JSON.parse(text));
-        const confirmed = window.confirm(
-          'Replace the data on this device with this backup? Tasks, diary, habits, goals, money, and alarms in the file will overwrite what is on this device.'
-        );
-        if (!confirmed) return;
-        applyImportedBackup(parsed);
-        alert('Backup imported.');
+        parsed = parseBackup(JSON.parse(text));
       } catch (err) {
-        alert(err instanceof BackupError ? err.message : 'This file is not a Dayflow backup.');
+        void showAlert({
+          title: 'Can\u2019t import this file',
+          message: err instanceof BackupError ? err.message : 'This file is not a Dayflow backup.',
+          tone: 'warning',
+        });
+        return;
+      }
+      const confirmed = await showConfirm({
+        title: 'Replace this device\u2019s data?',
+        message: 'Tasks, diary, habits, goals, money and alarms in the backup will overwrite what is on this device.',
+        tone: 'warning',
+        confirmLabel: 'Replace data',
+      });
+      if (!confirmed) return;
+      try {
+        applyImportedBackupRef.current(parsed);
+        void showAlert({ title: 'Backup imported', message: 'This device now has the data from the backup.', tone: 'success' });
+      } catch (err) {
+        void showAlert({
+          title: 'Import failed',
+          message: err instanceof BackupError ? err.message : 'The backup could not be applied.',
+          tone: 'warning',
+        });
       }
     };
     reader.onerror = () => {
-      alert('Could not read that file.');
+      void showAlert({ title: 'Could not read that file', message: 'Choose the file again and retry.', tone: 'warning' });
     };
     reader.readAsText(file);
   };
@@ -1931,7 +1971,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     };
     const error = validateDiaryDraft(draft);
     if (error) {
-      window.alert(error);
+      void showAlert({ title: 'Can’t save this note', message: error, tone: 'warning' });
       return false;
     }
     const now = new Date().toISOString();
@@ -1965,7 +2005,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
           ...diaryEntries,
         ];
     if (!diaryCollectionFits(next)) {
-      window.alert('These photos use more space than this device can keep. Remove a photo and try again.');
+      void showAlert({
+        title: 'Not enough space for these photos',
+        message: 'They use more space than this device can keep. Remove a photo and try again.',
+        tone: 'warning',
+      });
       return false;
     }
     setDiaryEntries(next);
@@ -2098,7 +2142,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const alreadyLeftTheBank =
         options?.allowOverdraft && validation.code === 'insufficient-balance';
       if (!alreadyLeftTheBank) {
-        window.alert(validation.message);
+        void showAlert(ledgerErrorDialog(validation));
         return false;
       }
     }
@@ -2108,23 +2152,26 @@ export default function App({ skipInitialLock = false }: AppProps) {
     return true;
   };
 
-  const handleDeleteTransaction = (id: string) => {
+  const handleDeleteTransaction = async (id: string) => {
     const tx = transactions.find((t) => t.id === id);
     if (!tx) return;
     const isTransfer = tx.type === 'transfer';
     const hasLinkedFee = transactions.some((t) => t.linkedTransferId === id);
     const isRecurring = tx.recurrence?.type && tx.recurrence.type !== 'none';
-    const confirmMsg = isTransfer
+    const question = isTransfer
       ? hasLinkedFee
-        ? 'Delete this transfer and its linked ATM fee?'
-        : 'Delete this transfer?'
+        ? { title: 'Delete this transfer?', message: 'Its linked ATM fee is deleted too.' }
+        : { title: 'Delete this transfer?', message: 'Both account balances update.' }
       : isRecurring
-      ? `Delete this entry only? The series will continue generating future entries.`
-      : `Delete this transaction?`;
-    if (!window.confirm(confirmMsg)) return;
+        ? { title: 'Delete this entry only?', message: 'The series keeps creating future entries.' }
+        : { title: 'Delete this transaction?' };
+    if (!(await showConfirm({ ...question, tone: 'danger', confirmLabel: 'Delete' }))) return;
 
-    const removedIds = idsRemovedByCascade(transactions, id);
-    const removed = transactions.filter((t) => removedIds.includes(t.id));
+    // Recompute from the latest list: a sync may have changed it while the dialog was open.
+    const latest = transactionsRef.current;
+    if (!latest.some((t) => t.id === id)) return;
+    const removedIds = idsRemovedByCascade(latest, id);
+    const removed = latest.filter((t) => removedIds.includes(t.id));
     markDeleted(storageKeys, removedIds);
     setTransactions((prev) => removeTransactionCascade(prev, id));
     setRecentlyDeletedTransaction({ txs: removed });
@@ -2265,7 +2312,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       settings: ledgerSettings[0] || { allowNegativeBalance: false },
     });
     if (isLedgerError(validation)) {
-      window.alert(validation.message);
+      void showAlert(ledgerErrorDialog(validation));
       return;
     }
     const tx = buildIncomeOrExpense(draft);
@@ -2287,7 +2334,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setIsAccountModalOpen(true);
   };
 
-  const handleSaveAccount = (partial: Partial<Account>) => {
+  const handleSaveAccount = async (partial: Partial<Account>): Promise<boolean> => {
     const now = new Date().toISOString();
     const name = (partial.name || '').trim();
     if (!name) return false;
@@ -2296,9 +2343,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const existing = accounts.find((a) => a.id === partial.id);
       if (!existing) return false;
       if (!existing.isArchived && partial.isArchived) {
-        const confirmed = window.confirm(
-          `Archive "${existing.name}"? It stops appearing in totals and pickers, but all of its transactions are kept.`
-        );
+        const confirmed = await showConfirm({
+          title: `Archive “${existing.name}”?`,
+          message: 'It stops appearing in totals and pickers. All of its transactions are kept.',
+          tone: 'warning',
+          confirmLabel: 'Archive',
+        });
         // Refusing the confirmation must not silently drop the other edits.
         if (!confirmed) return false;
       }
@@ -2350,7 +2400,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       settings: ledgerSettings[0] || { allowNegativeBalance: false },
     });
     if (isLedgerError(validation)) {
-      window.alert(validation.message);
+      void showAlert(ledgerErrorDialog(validation));
       return false;
     }
 
@@ -2484,10 +2534,15 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
   };
 
-  const handleDeleteDebt = (id: string) => {
+  const handleDeleteDebt = async (id: string) => {
     const debt = debts.find((d) => d.id === id);
     if (!debt) return;
-    if (!window.confirm(`Delete this debt for ${debt.personName}?`)) return;
+    const confirmed = await showConfirm({
+      title: `Delete the debt for ${debt.personName}?`,
+      tone: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed) return;
     markDeleted(storageKeys, [id]);
     setDebts((prev) => prev.filter((d) => d.id !== id));
   };
@@ -2577,16 +2632,19 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
   };
 
-  const handleDeleteBillTemplate = (id: string) => {
+  const handleDeleteBillTemplate = async (id: string) => {
     const template = billTemplates.find((t) => t.id === id);
     if (!template) return;
-    if (
-      !window.confirm(
-        `Delete bill template "${template.name}"? Future unpaid bills will be removed; paid history is kept.`
-      )
-    )
-      return;
-    markDeleted(storageKeys, [id, ...billPayments.filter((p) => p.billId === id && !p.paid).map((p) => p.id)]);
+    const confirmed = await showConfirm({
+      title: `Delete the “${template.name}” bill?`,
+      message: 'Unpaid bills from it are removed. Paid history is kept.',
+      tone: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed) return;
+    // The latest payments, so the tombstones match exactly what the filter below removes.
+    const unpaid = billPaymentsRef.current.filter((p) => p.billId === id && !p.paid).map((p) => p.id);
+    markDeleted(storageKeys, [id, ...unpaid]);
     setBillTemplates((prev) => prev.filter((t) => t.id !== id));
     // Remove future unpaid payments for this template; keep paid ones for history.
     setBillPayments((prev) =>
@@ -2621,7 +2679,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         settings: ledgerSettings[0] || { allowNegativeBalance: false },
       });
       if (isLedgerError(validation)) {
-        window.alert(validation.message);
+        void showAlert(ledgerErrorDialog(validation));
         return;
       }
 

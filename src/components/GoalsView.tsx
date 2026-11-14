@@ -7,6 +7,7 @@ import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { GoalModal } from './GoalModal';
 import { HabitModal } from './HabitModal';
+import { showConfirm } from './ui/AppDialog';
 
 interface GoalsViewProps {
   goals: Goal[];
@@ -196,9 +197,14 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!window.confirm(`Delete goal "${goal.title}"? Linked habits will stay.`)) return;
-                    onDeleteGoal(goal.id);
+                  onClick={async () => {
+                    const confirmed = await showConfirm({
+                      title: `Delete the goal “${goal.title}”?`,
+                      message: 'Linked habits stay.',
+                      tone: 'danger',
+                      confirmLabel: 'Delete',
+                    });
+                    if (confirmed) onDeleteGoal(goal.id);
                   }}
                   aria-label={`Delete ${goal.title}`}
                   className="w-9 h-9 flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"

@@ -10,7 +10,8 @@ interface AccountModalProps {
   isOpen: boolean;
   onClose: () => void;
   /** Return false to keep the modal open (e.g. the user cancelled archiving). */
-  onSave: (draft: Partial<Account>) => boolean | void;
+  /** May ask a question first (archiving), so it can resolve later. */
+  onSave: (draft: Partial<Account>) => boolean | void | Promise<boolean | void>;
   initialAccount?: Account | null;
   accounts: Account[];
   transactions: FinanceTransaction[];
@@ -67,7 +68,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = form.name.trim();
     if (!name) {
@@ -104,7 +105,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       return;
     }
 
-    const saved = onSave({
+    const saved = await onSave({
       id: initialAccount?.id,
       name,
       type: form.type,

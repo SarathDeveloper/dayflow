@@ -25,6 +25,7 @@ import { Card } from './ui/Card';
 import { HabitCheckControl, HabitSkipButton } from './HabitCheckControl';
 import { HabitIcon } from './HabitIcon';
 import { HabitModal } from './HabitModal';
+import { showConfirm } from './ui/AppDialog';
 
 interface HabitsViewProps {
   goals: Goal[];
@@ -130,9 +131,14 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
     setCreating(false);
     setEditing(habit);
   };
-  const deleteHabit = (habit: Habit) => {
-    if (!window.confirm(`Delete habit "${habit.title}"?`)) return;
-    onDeleteHabit(habit.id);
+  const deleteHabit = async (habit: Habit) => {
+    const confirmed = await showConfirm({
+      title: `Delete the habit “${habit.title}”?`,
+      message: 'Its check-in history is deleted too.',
+      tone: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (confirmed) onDeleteHabit(habit.id);
   };
 
   return (

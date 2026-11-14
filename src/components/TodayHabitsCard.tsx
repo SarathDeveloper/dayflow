@@ -4,6 +4,7 @@ import type { Goal, Habit, HabitCheckIn, HabitCheckInPatch } from '../types';
 import { checkInOn, habitBlockReason, isComplete, isDueToday, isScheduledOn, todayDateString } from '../lib/habits';
 import { Card } from './ui/Card';
 import { HabitDayRow } from './HabitsView';
+import { showConfirm } from './ui/AppDialog';
 
 interface TodayHabitsCardProps {
   date: string;
@@ -67,9 +68,14 @@ export const TodayHabitsCard: React.FC<TodayHabitsCardProps> = ({
             compact
             onSetCheckIn={onSetCheckIn}
             onEdit={() => onEditHabit(habit)}
-            onDelete={() => {
-              if (!window.confirm(`Delete habit "${habit.title}"?`)) return;
-              onDeleteHabit(habit.id);
+            onDelete={async () => {
+              const confirmed = await showConfirm({
+                title: `Delete the habit “${habit.title}”?`,
+                message: 'Its check-in history is deleted too.',
+                tone: 'danger',
+                confirmLabel: 'Delete',
+              });
+              if (confirmed) onDeleteHabit(habit.id);
             }}
           />
         ))

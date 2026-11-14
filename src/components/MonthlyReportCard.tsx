@@ -10,6 +10,7 @@ import { buildPdf } from '../lib/simplePdf';
 import { DayflowAlarm } from '../services/dayflowAlarm';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
+import { showAlert } from './ui/AppDialog';
 
 interface MonthlyReportCardProps {
   transactions: FinanceTransaction[];
@@ -54,7 +55,7 @@ export const MonthlyReportCard: React.FC<MonthlyReportCardProps> = ({ transactio
     } catch (error) {
       if (!isShareCancel(error)) {
         console.warn('Report export failed:', error);
-        alert('Could not export the report.');
+        void showAlert({ title: 'Could not export the report', message: 'Try again in a moment.', tone: 'warning' });
       }
     } finally {
       setExporting(null);

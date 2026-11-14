@@ -277,6 +277,20 @@ export interface LedgerValidationFailure {
   message: string;
 }
 
+const LEDGER_ERROR_TITLES: Record<LedgerErrorCode, string> = {
+  'invalid-amount': 'Check the amount',
+  'account-required': 'Choose an account',
+  'account-not-found': 'Account not found',
+  'account-archived': 'This account is archived',
+  'same-account': 'Pick two different accounts',
+  'insufficient-balance': 'Not enough balance',
+};
+
+/** Title and message for showing a failed validation in a dialog. */
+export function ledgerErrorDialog(failure: LedgerValidationFailure): { title: string; message: string; tone: 'warning' } {
+  return { title: LEDGER_ERROR_TITLES[failure.code] ?? 'Can’t save this entry', message: failure.message, tone: 'warning' };
+}
+
 /** Boolean discriminants do not narrow without strictNullChecks. */
 export const isLedgerError = (
   validation: LedgerValidation

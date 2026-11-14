@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Cloud, CloudOff, Loader2, LogOut, RefreshCw, ShieldCheck, XCircle } from 'lucide-react';
 import { Button } from './ui/Button';
+import { showConfirm } from './ui/AppDialog';
 import { cn } from '../lib/cn';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
 import type { CloudCheckStep } from '../services/cloudSyncService';
@@ -98,14 +99,14 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              if (
-                window.confirm(
-                  'Replace the data on this device with the cloud copy? Changes on this device that have not synced yet will be lost.',
-                )
-              ) {
-                void sync.restoreFromCloud();
-              }
+            onClick={async () => {
+              const confirmed = await showConfirm({
+                title: 'Restore from the cloud?',
+                message: 'The data on this device is replaced with the cloud copy. Changes that have not synced yet are lost.',
+                tone: 'warning',
+                confirmLabel: 'Restore',
+              });
+              if (confirmed) void sync.restoreFromCloud();
             }}
             disabled={isBusy || signingOut}
           >
@@ -121,8 +122,13 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
             size="sm"
             variant="danger"
             disabled={signingOut}
-            onClick={() => {
-              if (!window.confirm('Sign out? Your data stays on this device, and you will need to sign in again to use Dayflow.')) return;
+            onClick={async () => {
+              const confirmed = await showConfirm({
+                title: 'Sign out of Dayflow?',
+                message: 'Your data stays on this device. You need to sign in again to use the app.',
+                confirmLabel: 'Sign out',
+              });
+              if (!confirmed) return;
               setSigningOut(true);
               void sync.disconnect().finally(() => setSigningOut(false));
             }}

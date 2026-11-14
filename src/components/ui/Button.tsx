@@ -1,10 +1,11 @@
 import React from 'react';
 import { cn } from '../../lib/cn';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'destructive';
 type ButtonSize = 'sm' | 'md';
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+// React 19 passes `ref` to function components as a prop; spreading props forwards it.
+interface ButtonProps extends React.ComponentPropsWithRef<'button'> {
   variant?: ButtonVariant;
   size?: ButtonSize;
 }
@@ -18,6 +19,8 @@ const variantClasses: Record<ButtonVariant, string> = {
     'bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white border-transparent',
   danger:
     'bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 border-rose-200 dark:border-rose-800/60',
+  /** Solid red: the confirming button of a destructive dialog. */
+  destructive: 'bg-rose-600 hover:bg-rose-500 text-white border-rose-500 shadow-md shadow-rose-600/25',
 };
 
 const sizeClasses: Record<ButtonSize, string> = {

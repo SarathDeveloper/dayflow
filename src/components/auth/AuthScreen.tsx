@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { App as CapApp } from '@capacitor/app';
 import { Eye, EyeOff, Loader2, LogIn, Mail, UserPlus } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { dismissTopDialog } from '../ui/AppDialog';
 import { cn } from '../../lib/cn';
 import { isNative } from '../../lib/platform';
 import { resetPassword, signIn, signUp } from '../../services/cloudSyncService';
@@ -37,6 +38,7 @@ export const AuthScreen: React.FC = () => {
     let disposed = false;
     let remove: (() => void) | null = null;
     void CapApp.addListener('backButton', () => {
+      if (dismissTopDialog()) return;
       if (modeRef.current !== 'signin') {
         setMode('signin');
         setError(null);

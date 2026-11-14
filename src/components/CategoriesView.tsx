@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, Tag as TagIcon, Folder, Trash2, Filter, Hash, Check } from 'lucide-react';
 import { Category, Task } from '../types';
+import { showConfirm } from './ui/AppDialog';
 
 interface CategoriesViewProps {
   categories: Category[];
@@ -173,11 +174,14 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
                         <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{catTasks.length} tasks</span>
                         {onDeleteCategory && categories.length > 1 && (
                           <button
-                            onClick={(e) => {
+                            onClick={async (e) => {
                               e.stopPropagation();
-                              if (confirm(`Delete category "${cat.name}"?`)) {
-                                onDeleteCategory(cat.id);
-                              }
+                              const confirmed = await showConfirm({
+                                title: `Delete the “${cat.name}” category?`,
+                                tone: 'danger',
+                                confirmLabel: 'Delete',
+                              });
+                              if (confirmed) onDeleteCategory(cat.id);
                             }}
                             className="text-slate-400 hover:text-rose-500 p-1"
                             title="Delete category"
