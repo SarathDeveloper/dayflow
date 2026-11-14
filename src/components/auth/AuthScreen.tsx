@@ -29,6 +29,7 @@ export const AuthScreen: React.FC = () => {
 
   // Android back: from Create account / Forgot password return to Sign in;
   // from Sign in leave the app in the background, as the app itself does.
+  const passwordRef = useRef<HTMLInputElement>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   useEffect(() => {
@@ -134,6 +135,14 @@ export const AuthScreen: React.FC = () => {
             type="email"
             autoComplete="email"
             inputMode="email"
+            enterKeyHint={mode === 'reset' ? 'send' : 'next'}
+            onKeyDown={(event) => {
+              // Keyboard "Next" moves to the password instead of submitting early.
+              if (event.key === 'Enter' && mode !== 'reset') {
+                event.preventDefault();
+                passwordRef.current?.focus();
+              }
+            }}
             autoCapitalize="none"
             spellCheck={false}
             value={email}
@@ -160,7 +169,9 @@ export const AuthScreen: React.FC = () => {
             </span>
             <span className="relative block">
               <input
+                ref={passwordRef}
                 type={showPassword ? 'text' : 'password'}
+                enterKeyHint="go"
                 autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}

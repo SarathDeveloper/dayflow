@@ -46,8 +46,10 @@ interface AuthShellProps {
 export const AuthShell: React.FC<AuthShellProps> = ({ title, subtitle, children }) => {
   usePreAppChrome();
   return (
-    <main className="min-h-dvh bg-stone-50 dark:bg-slate-950 flex items-center justify-center px-4 py-10 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2.5rem,env(safe-area-inset-bottom))]">
-      <div className="w-full max-w-sm space-y-6">
+    // Phones: the form sits in the upper half, so an on-screen keyboard that
+    // overlays the page (Android edge-to-edge) cannot cover the fields.
+    <main className="min-h-dvh overflow-y-auto bg-stone-50 dark:bg-slate-950 flex items-start sm:items-center justify-center px-4 pt-[max(2rem,calc(env(safe-area-inset-top)+1rem))] pb-[max(2rem,calc(env(safe-area-inset-bottom)+1rem))]">
+      <div className="w-full max-w-sm space-y-5 sm:space-y-6">
         <div className="flex flex-col items-center gap-3 text-center">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/20">
             <CheckCircle2 className="h-6 w-6" />
