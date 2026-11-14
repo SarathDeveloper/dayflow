@@ -7,6 +7,10 @@ coverage/
 *.log
 .env*
 !.env.example
+# .env is committed on purpose: it holds only the public Supabase URL and
+# publishable key (they ship inside the JS bundle anyway), so builds work
+# without a local file. Never put a secret in it; use .env.local, which stays ignored.
+!.env
 
 # Android signing material - never commit the keystore or its passwords.
 *.keystore

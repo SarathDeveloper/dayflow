@@ -219,7 +219,7 @@ export function parseBackup(raw: unknown): ParsedBackup {
 }
 
 /**
- * Mark every imported record as edited now. Drive sync keeps the newer copy,
+ * Mark every imported record as edited now. Cloud sync keeps the newer copy,
  * so without this an older backup would be overwritten by the cloud a few
  * seconds after import.
  */

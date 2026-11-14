@@ -1,10 +1,21 @@
 /**
- * Orchestrates Google Drive backup: auth state, automatic sync triggers and the
- * merge/restore operations. All heavy lifting lives in `driveSyncService` and
- * `syncMerge`; this hook only owns lifecycle and UI-facing state.
+ * Orchestrates Supabase cloud sync: sign-in state, automatic sync triggers and
+ * the merge / restore runs. What to pull and push is decided by the pure
+ * functions in `lib/cloudRecords`; the network calls live in
+ * `services/cloudSyncService`. This hook owns lifecycle and UI state only.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { App as CapApp } from '@capacitor/app';
+import type { Session } from '@supabase/supabase-js';
+import {
+  advanceCursor,
+  idsToDownload,
+  localVersions,
+  pullStart,
+  reconcile,
+  restoreFromRows,
+  sameSnapshot,
+} from '../lib/cloudRecords';
 import {
   DATA_SCHEMA_VERSION,
   getDeviceId,
@@ -13,46 +24,29 @@ import {
   readSyncMeta,
   writeSnapshot,
   writeSyncMeta,
-  type StorageKeys,
   type SyncEnvelope,
+  type SyncMeta,
 } from '../lib/persistence';
-import {
-  clearLegacyDriveProfileId,
-  preferRealTaskLists,
-  readLegacyDriveProfileId,
-} from '../lib/singleProfile';
+import { isNative } from '../lib/platform';
+import { preferRealTaskLists } from '../lib/singleProfile';
 import { mergeEnvelopes } from '../lib/syncMerge';
 import {
-  DriveAuthError,
-  DriveConflictError,
-  DriveScopeError,
-  loadCloudSnapshot,
-  saveCloudSnapshot,
-  snapshotsMatch,
-  testDriveConnection,
-  type CloudSnapshot,
-  type DriveCheckStep,
-} from '../services/driveSyncService';
-import {
-  GoogleAuthError,
-  acknowledgeRedirectAccount,
-  clearCachedAccessToken,
-  completeWebRedirectIfNeeded,
-  connectGoogleAccount,
-  describeGoogleAuthFailure,
-  disconnectGoogleAccount,
-  ensureAccessToken,
-  getCachedTokenScopes,
-  getStoredAccount,
-  hasAppDataScope,
-  hasPendingRedirectAccount,
-  hasValidToken,
-  isGoogleSignInConfigured,
-  isNativePlatform,
-  preloadGoogleSignIn,
-  readBootOAuthNotice,
-  type GoogleAccount,
-} from '../services/googleAuthService';
+  CloudAuthError,
+  accountOf,
+  currentSession,
+  fetchRows,
+  getSupabase,
+  hasStoredSession,
+  isCloudConfigured,
+  pullRowMeta,
+  pushRows,
+  signIn as signInRequest,
+  signOut as signOutRequest,
+  signUp as signUpRequest,
+  testCloudConnection,
+  type CloudAccount,
+  type CloudCheckStep,
+} from '../services/cloudSyncService';
 
 export type CloudSyncStatus =
   | 'unconfigured'
@@ -66,336 +60,298 @@ export type CloudSyncStatus =
 export interface UseCloudSyncOptions {
   /** Bumped by the app whenever local data changes, so sync can debounce. */
   revision: number;
-  /** Called after a cloud snapshot has been written to localStorage. */
+  /** Called after cloud data has been written to localStorage. */
   onDataApplied: () => void;
-  /** Disable sync entirely (used while a modal owns the screen, etc.). */
+  /** Disable sync entirely. */
   enabled?: boolean;
 }
 
 export interface CloudSyncApi {
   status: CloudSyncStatus;
-  account: GoogleAccount | null;
+  account: CloudAccount | null;
   lastSyncedAt: string | null;
   error: string | null;
+  /** Information that is not an error, e.g. "check your inbox". */
+  notice: string | null;
   configured: boolean;
   hasSession: boolean;
-  connect: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<boolean>;
+  signUp: (email: string, password: string) => Promise<boolean>;
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   restoreFromCloud: () => Promise<void>;
-  /** Walks the Drive steps and reports which one fails. */
-  testConnection: () => Promise<DriveCheckStep[]>;
+  /** Walks setup, account and database access, and reports which step fails. */
+  testConnection: () => Promise<CloudCheckStep[]>;
 }
 
-type SyncMode = 'merge' | 'restore';
+type SyncMode = 'merge' | 'restore' | 'switch-account';
 
 const AUTO_SYNC_DEBOUNCE_MS = 4000;
-/** How often an open browser tab checks Drive for edits made elsewhere. */
+/** How often an open browser tab checks for edits made on another device. */
 const WEB_PULL_INTERVAL_MS = 60_000;
-/** After the Google sheet closes, wait briefly for the plugin result before giving up. */
-const CONNECT_RESUME_GRACE_MS = 2000;
-/** Pull-merge-push rounds before a sync that keeps racing another device gives up. */
-const MAX_CONFLICT_ATTEMPTS = 3;
+const SESSION_ENDED = 'Your session ended. Sign in again to keep syncing.';
+
+function buildLocalEnvelope(): SyncEnvelope {
+  const keys = getStorageKeys(null);
+  const meta = readSyncMeta(keys);
+  return {
+    schemaVersion: DATA_SCHEMA_VERSION,
+    deviceId: getDeviceId(),
+    updatedAt: new Date().toISOString(),
+    // Empty when settings were never edited here, so they never claim to be newest.
+    settingsUpdatedAt: meta.settingsUpdatedAt ?? '',
+    tombstones: meta.tombstones,
+    data: readSnapshot(keys),
+  };
+}
 
 export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const { revision, onDataApplied, enabled = true } = options;
+  const configured = isCloudConfigured();
 
-  const keys = getStorageKeys(null);
-  const configured = isGoogleSignInConfigured();
-
-  const [bootNotice] = useState(() => readBootOAuthNotice());
-  const [account, setAccount] = useState<GoogleAccount | null>(() => getStoredAccount());
+  const [account, setAccount] = useState<CloudAccount | null>(null);
   const [status, setStatus] = useState<CloudSyncStatus>(() => {
-    if (!isGoogleSignInConfigured()) return 'unconfigured';
-    if (getStoredAccount()) return hasValidToken() ? 'idle' : 'needs-auth';
-    return bootNotice ? 'error' : 'disconnected';
+    if (!configured) return 'unconfigured';
+    return hasStoredSession() ? 'idle' : 'disconnected';
   });
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(
-    () => readSyncMeta(keys).lastSyncedAt ?? null
+    () => readSyncMeta(getStorageKeys(null)).lastSyncedAt ?? null,
   );
-  const [error, setError] = useState<string | null>(bootNotice);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const busyRef = useRef(false);
   const pendingModeRef = useRef<SyncMode | null>(null);
-  const pendingInteractiveRef = useRef(false);
-  const connectingRef = useRef(false);
-  const connectGeneration = useRef(0);
-  const keysRef = useRef<StorageKeys>(keys);
+  const signedInRef = useRef(configured && hasStoredSession());
+  const signingOutRef = useRef(false);
+  const authFlowRef = useRef(false);
   const onDataAppliedRef = useRef(onDataApplied);
-  keysRef.current = keys;
   onDataAppliedRef.current = onDataApplied;
 
-  const buildLocalEnvelope = useCallback((storageKeys: StorageKeys): SyncEnvelope => {
-    const meta = readSyncMeta(storageKeys);
-    const now = new Date().toISOString();
-    return {
-      schemaVersion: DATA_SCHEMA_VERSION,
-      deviceId: getDeviceId(),
-      updatedAt: now,
-      settingsUpdatedAt: meta.settingsUpdatedAt ?? now,
-      tombstones: meta.tombstones,
-      data: readSnapshot(storageKeys),
-    };
+  const writeMeta = useCallback((patch: Partial<SyncMeta>) => {
+    const keys = getStorageKeys(null);
+    const syncedAt = new Date().toISOString();
+    writeSyncMeta(keys, { ...readSyncMeta(keys), ...patch, lastSyncedAt: syncedAt });
+    setLastSyncedAt(syncedAt);
   }, []);
 
-  const applyEnvelope = useCallback((envelope: SyncEnvelope, storageKeys: StorageKeys) => {
-    writeSnapshot(storageKeys, envelope.data);
-    const meta = readSyncMeta(storageKeys);
-    const syncedAt = new Date().toISOString();
-    writeSyncMeta(storageKeys, {
-      ...meta,
-      tombstones: envelope.tombstones,
-      settingsUpdatedAt: envelope.settingsUpdatedAt,
-      // Record what we just applied so the settings effect does not mistake
-      // the incoming value for a fresh local edit.
-      settingsSnapshot: JSON.stringify(envelope.data.settings),
-      lastSyncedAt: syncedAt,
-    });
-    setLastSyncedAt(syncedAt);
-    onDataAppliedRef.current();
-  }, []);
+  const applyEnvelope = useCallback(
+    (envelope: SyncEnvelope, patch: Partial<SyncMeta>) => {
+      writeSnapshot(getStorageKeys(null), envelope.data);
+      writeMeta({
+        ...patch,
+        tombstones: envelope.tombstones,
+        settingsUpdatedAt: envelope.settingsUpdatedAt || undefined,
+        // Record what was applied, so the settings effect in App does not
+        // mistake the incoming value for a fresh local edit.
+        settingsSnapshot: JSON.stringify(envelope.data.settings),
+      });
+      onDataAppliedRef.current();
+    },
+    [writeMeta],
+  );
 
   const runSync = useCallback(
-    async (mode: SyncMode, opts: { silent?: boolean; allowInteractive?: boolean } = {}) => {
-      if (!enabled || !isGoogleSignInConfigured()) return;
+    async (mode: SyncMode, opts: { silent?: boolean } = {}): Promise<void> => {
+      if (!enabled || !configured) return;
       if (busyRef.current) {
-        pendingModeRef.current = mode;
-        pendingInteractiveRef.current = pendingInteractiveRef.current || Boolean(opts.allowInteractive);
+        // A restore or account switch outranks a queued merge.
+        if (pendingModeRef.current === null || mode !== 'merge') pendingModeRef.current = mode;
         return;
       }
-
-      const storedAccount = getStoredAccount();
-      if (!storedAccount) {
-        setStatus('disconnected');
-        return;
-      }
-      setAccount(storedAccount);
-
-      const token = await ensureAccessToken({ allowInteractive: opts.allowInteractive });
-      if (!token) {
-        setStatus('needs-auth');
-        setError('Reconnect and allow Google Drive access so backups can upload and download.');
-        return;
-      }
-
       busyRef.current = true;
-      // A background pull must not flip the badge to "Syncing" every minute;
-      // only a sync the user asked for shows progress.
-      if (!opts.silent) {
-        setError(null);
-        setStatus('syncing');
-      }
-
-      const storageKeys = keysRef.current;
-      const legacyProfileId = readLegacyDriveProfileId();
-      // The hidden app-data folder is only readable with `drive` or
-      // `drive.appdata`. Under `drive.file` that lookup would 403 every sync.
-      const canReadAppData = hasAppDataScope(getCachedTokenScopes());
-      let activeToken = token;
-
       try {
-        // A token can expire mid-sync. Renew once and replay the failed call
-        // rather than dropping the user back to the Connect button. Only a
-        // user-initiated sync may renew, because renewal can show Google UI.
-        const renewToken = async (): Promise<string | null> => {
-          if (!opts.allowInteractive) return null;
-          clearCachedAccessToken();
-          const renewed = await ensureAccessToken({ allowInteractive: true });
-          if (renewed) activeToken = renewed;
-          return renewed;
-        };
-        const withAuthRetry = async <T,>(run: () => Promise<T>): Promise<T> => {
-          try {
-            return await run();
-          } catch (e) {
-            if (!(e instanceof DriveAuthError)) throw e;
-            const renewed = await renewToken();
-            if (!renewed) throw e;
-            return run();
-          }
-        };
-
-        // Another device may upload between our read and our write. Drive then
-        // refuses the write, so pull its copy, merge again, and retry.
-        const pullMergePush = async (): Promise<void> => {
-          const cloud = await withAuthRetry(() =>
-            loadCloudSnapshot(activeToken, legacyProfileId, { canReadAppData })
-          );
-
-          if (mode === 'restore') {
-            const pieces = [cloud.visible, ...cloud.hidden].filter((piece): piece is SyncEnvelope => piece !== null);
-            if (pieces.length === 0) throw new Error('No cloud backup found in Google Drive yet.');
-            let restored = pieces[0];
-            for (const extra of pieces.slice(1)) {
-              const paired = preferRealTaskLists(restored, extra);
-              restored = mergeEnvelopes(paired.left, paired.right);
-            }
-            applyEnvelope(restored, storageKeys);
-            if (!cloud.file || !cloud.visible || !snapshotsMatch(cloud.visible, restored)) {
-              await withAuthRetry(() =>
-                saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, restored)
-              );
-            }
-            return;
-          }
-
-          const stored = buildLocalEnvelope(storageKeys);
-          let local = stored;
-          for (const hidden of cloud.hidden) {
-            const paired = preferRealTaskLists(local, hidden);
-            local = mergeEnvelopes(paired.left, paired.right);
-          }
-          const pairedWithRemote = preferRealTaskLists(local, cloud.visible);
-          local = pairedWithRemote.left;
-          const merged = mergeEnvelopes(local, pairedWithRemote.right);
-
-          const visibleAlreadyMatches =
-            cloud.file !== null &&
-            cloud.visible !== null &&
-            snapshotsMatch(cloud.visible, merged) &&
-            snapshotsMatch(local, merged);
-
-          if (!visibleAlreadyMatches) {
-            await withAuthRetry(() =>
-              saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, merged)
-            );
-          }
-
-          // Write back when Drive or a one-time hidden file changed this device.
-          if (!snapshotsMatch(stored, merged)) {
-            applyEnvelope(merged, storageKeys);
+        const session = await currentSession();
+        if (!session) {
+          setAccount(null);
+          if (signedInRef.current) {
+            signedInRef.current = false;
+            setStatus('needs-auth');
+            setError(SESSION_ENDED);
           } else {
-            const meta = readSyncMeta(storageKeys);
-            const syncedAt = new Date().toISOString();
-            writeSyncMeta(storageKeys, { ...meta, lastSyncedAt: syncedAt });
-            setLastSyncedAt(syncedAt);
+            setStatus('disconnected');
           }
-        };
-
-        for (let attempt = 1; ; attempt += 1) {
-          try {
-            await pullMergePush();
-            break;
-          } catch (e) {
-            if (!(e instanceof DriveConflictError) || attempt >= MAX_CONFLICT_ATTEMPTS) throw e;
-          }
+          return;
+        }
+        signedInRef.current = true;
+        setAccount(accountOf(session));
+        // A background pull must not flip the badge to "Syncing" every minute.
+        if (!opts.silent) {
+          setError(null);
+          setStatus('syncing');
         }
 
-        clearLegacyDriveProfileId();
+        const userId = session.user.id;
+        const meta = readSyncMeta(getStorageKeys(null));
+        const sameUser = meta.cloudUserId === userId;
+        if (meta.cloudUserId && !sameUser && mode === 'merge') {
+          // Only an explicit, confirmed sign-in may move a device to another account.
+          throw new Error('This device is linked to another account. Sign out, then sign in again to switch.');
+        }
+        const startedAt = new Date().toISOString();
+
+        if (mode === 'restore' || mode === 'switch-account') {
+          const metaRows = await pullRowMeta(userId, null);
+          const rows = await fetchRows(
+            userId,
+            metaRows.filter((row) => !row.deleted).map((row) => row.id),
+          );
+          const restored = restoreFromRows(
+            buildLocalEnvelope(),
+            { meta: metaRows, rows },
+            { allowEmpty: mode === 'switch-account' },
+          );
+          if (!restored) {
+            throw new Error('Nothing is stored in the cloud for this account yet. Use Sync now to upload this device.');
+          }
+          applyEnvelope(restored, {
+            cloudCursor: advanceCursor(undefined, metaRows),
+            cloudPushedAt: startedAt,
+            cloudUserId: userId,
+          });
+        } else {
+          const cursor = sameUser ? meta.cloudCursor : undefined;
+          const pushedAt = sameUser ? meta.cloudPushedAt : undefined;
+          const local = buildLocalEnvelope();
+          const metaRows = await pullRowMeta(userId, pullStart(cursor));
+          const rows = await fetchRows(userId, idsToDownload(metaRows, localVersions(local)));
+          const { remote, push } = reconcile(local, { meta: metaRows, rows }, pushedAt);
+          await pushRows(userId, push);
+
+          // The user may have edited while the network calls ran. Merge the
+          // pulled rows into what is stored now, not into the earlier read.
+          // Those edits are newer than `startedAt`, so the next run pushes them.
+          const fresh = buildLocalEnvelope();
+          const paired = preferRealTaskLists(fresh, remote);
+          const merged = mergeEnvelopes(paired.left, paired.right);
+          const patch = {
+            cloudCursor: advanceCursor(cursor, metaRows),
+            cloudPushedAt: startedAt,
+            cloudUserId: userId,
+          };
+          if (sameSnapshot(fresh, merged)) writeMeta(patch);
+          else applyEnvelope(merged, patch);
+        }
+
         setStatus('idle');
         setError(null);
       } catch (e) {
-        if (e instanceof DriveAuthError || e instanceof DriveScopeError) {
+        if (e instanceof CloudAuthError) {
           pendingModeRef.current = null;
-          clearCachedAccessToken();
           setStatus('needs-auth');
-          setError(
-            e instanceof DriveScopeError
-              ? e.message
-              : 'Google Drive access expired. Tap Reconnect to resume syncing.'
-          );
+          setError(e.message);
         } else {
-          const message = e instanceof Error ? e.message : String(e);
-          setStatus(getStoredAccount() ? 'error' : 'disconnected');
-          setError(message);
+          setStatus('error');
+          setError(e instanceof Error ? e.message : String(e));
         }
       } finally {
         busyRef.current = false;
         const pending = pendingModeRef.current;
-        const pendingInteractive = pendingInteractiveRef.current;
         pendingModeRef.current = null;
-        pendingInteractiveRef.current = false;
-        if (pending) {
-          void runSync(pending, { silent: true, allowInteractive: pendingInteractive });
-        }
+        if (pending) void runSync(pending, { silent: true });
       }
     },
-    [applyEnvelope, buildLocalEnvelope, enabled]
+    [applyEnvelope, configured, enabled, writeMeta],
   );
 
-  useEffect(() => {
-    if (configured) preloadGoogleSignIn();
-  }, [configured]);
-
-  // Finish a redirect that was still in the URL, then sync. The account is
-  // applied even if this effect cleans up, because Strict Mode does that
-  // immediately and would otherwise drop a sign-in that already succeeded.
-  useEffect(() => {
-    if (!configured) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const accountFromRedirect = await completeWebRedirectIfNeeded();
-        const justConnected = Boolean(accountFromRedirect) || hasPendingRedirectAccount();
-        if (!justConnected) return;
-        const stored = accountFromRedirect ?? getStoredAccount();
-        if (!stored) return;
-        setAccount(stored);
-        if (!hasValidToken()) {
-          if (!cancelled) setStatus('needs-auth');
-          return;
+  /**
+   * After any sign-in: a device last synced with a different account must not
+   * merge two people's data. Ask, then replace this device's data or back out.
+   */
+  const afterSignIn = useCallback(
+    async (session: Session): Promise<boolean> => {
+      const previous = readSyncMeta(getStorageKeys(null)).cloudUserId;
+      const switching = Boolean(previous && previous !== session.user.id);
+      if (switching) {
+        const replace = window.confirm(
+          'This device was last synced with a different account. Replace the data on this device with this account’s data?\n\nChanges not yet synced to the other account will be lost. Cancel signs out again.',
+        );
+        if (!replace) {
+          signingOutRef.current = true;
+          await signOutRequest();
+          signingOutRef.current = false;
+          signedInRef.current = false;
+          setAccount(null);
+          setStatus('disconnected');
+          return false;
         }
-        setStatus('idle');
-        setError(null);
-        if (cancelled) return;
-        acknowledgeRedirectAccount();
-        await runSync('merge', { silent: true });
-      } catch (e) {
-        const stored = getStoredAccount();
-        const linked = Boolean(stored && hasValidToken());
-        if (linked && stored) {
-          setAccount(stored);
-          setStatus('idle');
-          if (!cancelled) acknowledgeRedirectAccount();
-        }
-        if (cancelled) return;
-        if (e instanceof GoogleAuthError && e.code === 'CANCELED') {
-          if (!linked) {
-            setStatus('disconnected');
-            setError(null);
-          }
-          return;
-        }
-        setError(describeGoogleAuthFailure(e));
-        if (!linked) setStatus('error');
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [configured, runSync]);
+      signedInRef.current = true;
+      setAccount(accountOf(session));
+      setStatus('idle');
+      setError(null);
+      await runSync(switching ? 'switch-account' : 'merge');
+      return true;
+    },
+    [runSync],
+  );
 
-  // First sync on launch. runSync now renews an expired token itself, so this
-  // no longer needs a live token to be present.
+  // Follow auth changes made outside this hook: the session restored on launch,
+  // a sign-in from the email confirmation link (web), a refresh that failed.
   useEffect(() => {
-    if (!configured || !enabled) return;
-    if (!getStoredAccount()) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setAccount(null);
+        if (signingOutRef.current || !signedInRef.current) {
+          setStatus('disconnected');
+        } else {
+          setStatus('needs-auth');
+          setError(SESSION_ENDED);
+        }
+        signedInRef.current = false;
+        return;
+      }
+      if (!session) {
+        if (event === 'INITIAL_SESSION') {
+          signedInRef.current = false;
+          setStatus((current) => (current === 'idle' ? 'disconnected' : current));
+        }
+        return;
+      }
+      setAccount(accountOf(session));
+      if (event === 'SIGNED_IN' && !authFlowRef.current) {
+        // Not ours (e.g. the confirmation link). Deferred: an auth callback
+        // must not await other Supabase calls.
+        setTimeout(() => void afterSignIn(session), 0);
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [afterSignIn]);
+
+  // First sync on launch.
+  useEffect(() => {
+    if (!configured || !enabled || !signedInRef.current) return;
     void runSync('merge', { silent: true });
-    // Intentionally only on mount. Later edits go through the revision debounce.
+    // Only on mount. Later edits go through the revision debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured]);
 
-  // Debounced push after local mutations.
+  // Debounced push after local edits.
   useEffect(() => {
-    if (!configured || !enabled) return;
-    if (!getStoredAccount()) return;
-    const timer = setTimeout(() => {
-      void runSync('merge', { silent: true });
-    }, AUTO_SYNC_DEBOUNCE_MS);
+    if (!configured || !enabled || !signedInRef.current) return;
+    const timer = setTimeout(() => void runSync('merge', { silent: true }), AUTO_SYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revision, configured, enabled]);
 
-  // Catch up when the app comes back to the foreground.
+  // Android: refresh tokens only while in the foreground, and catch up on resume.
   useEffect(() => {
-    if (!configured || !isNativePlatform() || !enabled) return;
+    if (!configured || !isNative() || !enabled) return;
+    const supabase = getSupabase();
     let remove: (() => void) | null = null;
     void CapApp.addListener('appStateChange', ({ isActive }) => {
-      if (isActive && !connectingRef.current) void runSync('merge', { silent: true });
+      if (isActive) {
+        void supabase?.auth.startAutoRefresh();
+        if (signedInRef.current) void runSync('merge', { silent: true });
+      } else {
+        void supabase?.auth.stopAutoRefresh();
+      }
     }).then((handle) => {
       remove = () => {
         try {
-          handle.remove();
+          void handle.remove();
         } catch {
           // already detached
         }
@@ -405,15 +361,12 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, enabled]);
 
-  // Web has no appStateChange, so an open tab never noticed phone edits. Pull
-  // when the tab becomes visible, regains focus, comes back online, and once a
-  // minute while it stays visible.
+  // Web: pull when the tab becomes visible, regains focus, comes back online,
+  // and once a minute while it stays visible.
   useEffect(() => {
-    if (!configured || isNativePlatform() || !enabled) return;
-    if (typeof document === 'undefined') return;
+    if (!configured || isNative() || !enabled || typeof document === 'undefined') return;
     const pull = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!getStoredAccount()) return;
+      if (document.visibilityState !== 'visible' || !signedInRef.current) return;
       void runSync('merge', { silent: true });
     };
     const onVisibility = () => {
@@ -432,131 +385,84 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, enabled]);
 
-  // The Drive consent screen pauses the app. If it never returns a result, the
-  // sign-in promise stays pending and the button would spin forever.
-  useEffect(() => {
-    if (!configured || !isNativePlatform()) return;
-    let remove: (() => void) | null = null;
-    let graceTimer: ReturnType<typeof setTimeout> | null = null;
-    void CapApp.addListener('appStateChange', ({ isActive }) => {
-      if (!isActive) {
-        if (graceTimer) {
-          clearTimeout(graceTimer);
-          graceTimer = null;
-        }
-        return;
-      }
-      if (!connectingRef.current) return;
-      const generation = connectGeneration.current;
-      graceTimer = setTimeout(() => {
-        graceTimer = null;
-        if (!connectingRef.current || generation !== connectGeneration.current) return;
-        connectingRef.current = false;
-        // This attempt produced no token. An older cached token must not
-        // turn a lost consent result into Linked.
-        setStatus(getStoredAccount() ? 'needs-auth' : 'disconnected');
-        setError('Google sign-in did not finish. Try again.');
-      }, CONNECT_RESUME_GRACE_MS);
-    }).then((handle) => {
-      remove = () => {
-        try {
-          handle.remove();
-        } catch {
-          // already detached
-        }
-      };
-    });
-    return () => {
-      if (graceTimer) clearTimeout(graceTimer);
-      remove?.();
-    };
-  }, [configured]);
-
-  const connect = useCallback(async () => {
-    const generation = ++connectGeneration.current;
-    setError(null);
-    setStatus('connecting');
-    connectingRef.current = true;
-    try {
-      const nextAccount = await connectGoogleAccount();
-      if (generation !== connectGeneration.current) return;
-      connectingRef.current = false;
-      setAccount(nextAccount);
-      if (!hasValidToken()) {
-        setStatus('needs-auth');
-        setError('Google did not return a Drive token. Tap Reconnect to try again.');
-        return;
-      }
-      setStatus('idle');
+  const signIn = useCallback(
+    async (email: string, password: string): Promise<boolean> => {
+      setStatus('connecting');
       setError(null);
-      await runSync('merge');
-    } catch (e) {
-      if (generation !== connectGeneration.current) return;
-      connectingRef.current = false;
-      if (e instanceof GoogleAuthError && e.code === 'CANCELED') {
-        const stored = getStoredAccount();
-        setStatus(stored && hasValidToken() ? 'idle' : stored ? 'needs-auth' : 'disconnected');
-        setError(null);
-        return;
+      setNotice(null);
+      authFlowRef.current = true;
+      try {
+        const session = await signInRequest(email, password);
+        authFlowRef.current = false;
+        return await afterSignIn(session);
+      } catch (e) {
+        setStatus('disconnected');
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      } finally {
+        authFlowRef.current = false;
       }
-      const message = describeGoogleAuthFailure(e);
-      if (getStoredAccount() && hasValidToken()) {
-        setAccount(getStoredAccount());
-        setStatus('idle');
-        setError(message);
-        return;
+    },
+    [afterSignIn],
+  );
+
+  const signUp = useCallback(
+    async (email: string, password: string): Promise<boolean> => {
+      setStatus('connecting');
+      setError(null);
+      setNotice(null);
+      authFlowRef.current = true;
+      try {
+        const session = await signUpRequest(email, password);
+        authFlowRef.current = false;
+        if (!session) {
+          setStatus('disconnected');
+          setNotice('Account created. Open the confirmation link Supabase emailed you, then sign in here.');
+          return true;
+        }
+        return await afterSignIn(session);
+      } catch (e) {
+        setStatus('disconnected');
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      } finally {
+        authFlowRef.current = false;
       }
-      setStatus(getStoredAccount() ? 'needs-auth' : 'disconnected');
-      setError(message);
-    }
-  }, [runSync]);
+    },
+    [afterSignIn],
+  );
 
   const disconnect = useCallback(async () => {
-    await disconnectGoogleAccount();
-    setAccount(null);
-    setStatus('disconnected');
-    setError(null);
+    signingOutRef.current = true;
+    try {
+      await signOutRequest();
+    } finally {
+      signingOutRef.current = false;
+      signedInRef.current = false;
+      setAccount(null);
+      setStatus('disconnected');
+      setError(null);
+      setNotice(null);
+    }
   }, []);
 
-  const syncNow = useCallback(async () => {
-    // An explicit tap may raise the native account picker when the token
-    // expired; automatic syncs never do.
-    await runSync('merge', { allowInteractive: true });
-  }, [runSync]);
-
-  const restoreFromCloud = useCallback(async () => {
-    await runSync('restore', { allowInteractive: true });
-  }, [runSync]);
-
-  const testConnection = useCallback(async (): Promise<DriveCheckStep[]> => {
-    if (!getStoredAccount()) {
-      return [{ step: 'Account', ok: false, message: 'Connect Google Drive first.' }];
-    }
-    const token = await ensureAccessToken({ allowInteractive: true });
-    if (!token) {
-      return [
-        {
-          step: 'Drive access',
-          ok: false,
-          message: 'Google Drive access expired. Tap Reconnect to allow access again.',
-        },
-      ];
-    }
-    return testDriveConnection(token, getCachedTokenScopes());
-  }, []);
+  const syncNow = useCallback(() => runSync('merge'), [runSync]);
+  const restoreFromCloud = useCallback(() => runSync('restore'), [runSync]);
+  const testConnection = useCallback(() => testCloudConnection(), []);
 
   return {
     status,
     account,
     lastSyncedAt,
     error,
+    notice,
     configured,
-    hasSession: Boolean(account) && hasValidToken(),
-    connect,
+    hasSession: Boolean(account),
+    signIn,
+    signUp,
     disconnect,
     syncNow,
     restoreFromCloud,
     testConnection,
   };
 }
-

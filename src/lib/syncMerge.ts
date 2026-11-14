@@ -1,6 +1,6 @@
 /**
- * Record-level three-way-ish merge between the local snapshot and the copy
- * stored in Google Drive.
+ * Record-level merge between the local snapshot and the records pulled from
+ * the cloud.
  *
  * Strategy: last-write-wins per record using the record's `updatedAt` (falling
  * back to `createdAt`). A tombstone removes every copy of a record last saved
@@ -15,7 +15,8 @@ import {
   type SyncEnvelope,
 } from './persistence';
 
-function timestampOf(record: { updatedAt?: string; createdAt?: string }): number {
+/** A record's last-write time: `updatedAt`, else `createdAt`, else 0. Cloud sync compares the same value. */
+export function recordTimestamp(record: { updatedAt?: string; createdAt?: string }): number {
   const raw = record.updatedAt || record.createdAt;
   const time = raw ? Date.parse(raw) : NaN;
   return Number.isFinite(time) ? time : 0;
@@ -53,7 +54,7 @@ export function mergeCollection<T extends MergeableRecord>(
       merged.push(record);
       continue;
     }
-    merged.push(timestampOf(counterpart) > timestampOf(record) ? counterpart : record);
+    merged.push(recordTimestamp(counterpart) > recordTimestamp(record) ? counterpart : record);
   }
 
   for (const record of remote) {
@@ -69,7 +70,7 @@ export function mergeCollection<T extends MergeableRecord>(
     // must win; anything last saved before the deletion stays deleted.
     const deletedAt = Date.parse(tombstone);
     if (!Number.isFinite(deletedAt)) return false;
-    return timestampOf(record) > deletedAt;
+    return recordTimestamp(record) > deletedAt;
   });
 }
 
@@ -99,7 +100,9 @@ export function mergeTombstones(
 }
 
 /**
- * Merge the full local envelope with the one downloaded from Drive.
+ * Merge the local envelope with the remote one. The remote side may be partial
+ * (only records changed since the last pull): a collection or record missing
+ * from it simply keeps the local copy.
  * `deviceId` always stays local so the next upload is attributed correctly.
  */
 export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope | null): SyncEnvelope {
@@ -110,7 +113,7 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope | null)
     tasks: mergeCollection(local.data.tasks, remote.data.tasks, tombstones),
     categories: mergeCollection(local.data.categories, remote.data.categories, tombstones),
     transactions: mergeCollection(local.data.transactions, remote.data.transactions, tombstones),
-    // `?? []` keeps a v1 Drive backup (no accounts) mergeable.
+    // `?? []` keeps a v1 snapshot (no accounts) mergeable.
     accounts: mergeCollection(local.data.accounts ?? [], remote.data.accounts ?? [], tombstones),
     ledgerSettings: mergeCollection(
       local.data.ledgerSettings ?? [],
@@ -200,7 +203,7 @@ export function isEnvelopeEmpty(envelope: SyncEnvelope | null): boolean {
   );
 }
 
-/** Defensive validation for JSON downloaded from Drive. */
+/** Defensive validation for a snapshot read from outside the app. */
 export function isValidEnvelope(value: unknown): value is SyncEnvelope {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<SyncEnvelope>;

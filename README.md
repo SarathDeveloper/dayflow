@@ -5,9 +5,9 @@ A personal daily OS for tasks, focus sessions, and spending — built with React
 It ships two ways from the same codebase:
 
 - **Web / PWA** — installable from Chrome, offline capable.
-- **Android APK** — a Capacitor shell with real scheduled notifications that fire with the app closed, plus optional Google Drive backup.
+- **Android APK** — a Capacitor shell with real scheduled notifications that fire with the app closed, plus optional cloud sync.
 
-All data lives in `localStorage`; there is no backend. Cloud backup is optional and writes a single JSON snapshot to a visible `Dayflow` folder in your own Google Drive.
+All data lives in `localStorage` and the app works fully offline. Cloud sync is optional: sign in with email and password and each record syncs through a Supabase database, so the phone and the website stay in step.
 
 ## Features
 
@@ -50,7 +50,7 @@ All data lives in `localStorage`; there is no backend. Cloud backup is optional 
 - Light / dark theme
 - Browser notifications with quiet hours
 - Sound effects and speech options
-- One device profile for tasks, money, and diary. Optional Google Drive merge keeps the desktop site and the phone on the same file
+- One device profile for tasks, money, and diary. Optional cloud sync (Supabase, email + password) keeps the website and the phone on the same data
 - Undo toast for deletes, JSON export / import, reset to sample data
 
 **Android app**
@@ -60,17 +60,16 @@ All data lives in `localStorage`; there is no backend. Cloud backup is optional 
 - Hardware back button closes modals before leaving the app
 - Dark splash screen and status bar that follows the theme
 - Reminder reliability diagnostics (notification permission, exact alarms, OEM battery tips)
-- Optional Google sign-in with a visible Dayflow Drive backup and record-level merge
+- Optional cloud sync with record-level merge
 
 ## Tech Stack
 
 - [React 19](https://react.dev/) with TypeScript
 - [Vite 6](https://vitejs.dev/) for dev server and build
 - [Tailwind CSS 4](https://tailwindcss.com/) via `@tailwindcss/vite`
-- [Motion](https://motion.dev/) for animations
 - [Lucide React](https://lucide.dev/) for icons
-- [Capacitor 8](https://capacitorjs.com/) + `@capacitor/local-notifications`, `app`, `splash-screen`, `status-bar`, `@capawesome/capacitor-google-sign-in`
-- [Google Drive API v3](https://developers.google.com/workspace/drive/api/guides/api-specific-auth) via plain `fetch` (no SDK), using the `drive.file` scope
+- [Capacitor 8](https://capacitorjs.com/) + `@capacitor/local-notifications`, `app`, `splash-screen`, `status-bar`
+- [Supabase](https://supabase.com/) (`@supabase/supabase-js`) for optional sign-in and sync: one Postgres table with row-level security
 - `localStorage` for all persistence; no server
 
 ## Getting Started
@@ -145,16 +144,14 @@ updates. Its SHA-1 is
 
 Play Console checklist (manual, not in this repo):
 
-- **Play App Signing**: enrol, then add the **app signing key** SHA-1 that Play
-  shows (Setup -> App integrity) as an extra Android OAuth client in Google
-  Cloud, next to the one above. Without it Google Drive sign-in fails for
-  installs from Play.
+- **Play App Signing**: enrol (Setup -> App integrity).
 - **Permission declarations**: `USE_EXACT_ALARM` (alarms and reminders are the
   core feature), `USE_FULL_SCREEN_INTENT` (the alarm ring screen), and the
   `mediaPlayback` foreground service (alarm audio while ringing; Play asks for
   a short video).
-- **Data safety**: tasks, finance and diary data stay on the device; optional
-  backup goes to the user's own Google Drive (`drive.file` scope); biometrics
+- **Data safety**: tasks, finance and diary data stay on the device. With
+  optional cloud sync they are also stored in the app's Supabase database
+  under the user's account (email address collected for sign-in). Biometrics
   are used only for app lock and never leave the device. No SMS or
   notification access.
 - A **privacy policy** URL and the content rating questionnaire.
@@ -206,124 +203,130 @@ See [`.env.example`](.env.example).
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `VITE_GOOGLE_CLIENT_ID` | No | Web OAuth client id from Google Cloud Console. Needed only for Google Drive backup |
+| `VITE_SUPABASE_URL` | No | Supabase project URL. Needed only for cloud sync |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | No | Supabase publishable (or legacy anon) key. Public by design; row-level security protects the data |
 | `VITE_ENABLE_BANK_SMS` | No | `"true"` shows the bank-spend inbox. Leave off on `main`: it needs the native listener from `feature/bank-sms-notifications` |
 
-Everything else works without environment variables. To enable cloud backup:
+Everything else works without environment variables. Never put the Supabase
+`service_role` / secret key in `.env` or anywhere in the app.
 
-1. Google Cloud Console -> enable **Google Drive API**.
-2. OAuth consent screen -> External -> add your Gmail as a test user.
-3. Create an OAuth client of type **Web application**; copy the client id into
-   `.env` and into the host's `VITE_GOOGLE_CLIENT_ID` build variable. On that
-   same Web client, add every origin you sign in from — `http://127.0.0.1:3000`
-   and the deployed site, `https://daily-tasks-management.vercel.app` — to
-   **both** Authorized JavaScript origins and Authorized redirect URIs. Use the
-   origin only, with no path and no trailing slash. That is the exact
-   `redirect_uri` the app sends (`window.location.origin`). A
-   `redirect_uri_mismatch` error means that origin is missing. Copy it from the
-   Google error page’s **error details**, not from the `accounts.google.com`
-   address bar. A trailing slash is a different URI and will still be rejected.
-   Preview URLs
-   (`*-git-*.vercel.app`) are separate origins. The Android client cannot
-   be used for the website.
-4. Create OAuth clients of type **Android** with package `com.dayflow.dailytasks`.
-   A debug APK and a release APK are signed by different keys, so each needs its
-   own client:
+### Cloud sync setup (Supabase)
 
-   | Build | Keystore | SHA-1 |
-   | --- | --- | --- |
-   | Release | `dailytasks.keystore` | `60:BF:C7:3D:F4:C3:BB:E2:16:56:BE:4B:A3:19:C3:BE:B0:46:DA:BE` |
-   | Debug (`apk:debug`) | `~/.android/debug.keystore` | `7D:23:5D:0E:BC:B8:78:67:34:BC:DA:E0:7A:87:6D:D0:73:4A:6C:65` |
+1. Supabase dashboard -> your project -> **Connect** -> **Framework** -> React.
+   Copy the project URL and publishable key into `.env` (and into the host's
+   build variables, e.g. Vercel).
+2. **SQL Editor** -> run
+   [`supabase/migrations/20261114120000_dayflow_records.sql`](supabase/migrations/20261114120000_dayflow_records.sql)
+   once. It creates `public.dayflow_records`, the last-write-wins trigger, the
+   grants for signed-in users and the row-level security policies. Running it
+   again is safe.
+3. **Authentication -> URL Configuration**: set the Site URL to the deployed
+   site (`https://daily-tasks-management.vercel.app`) and add it and
+   `http://localhost:3000` to the redirect URLs. The email confirmation link
+   returns there.
+4. Rebuild. In the app: Settings -> Cloud Sync -> Create account, confirm the
+   email, then Sign in. The first sign-in uploads what is on the device.
 
-   Without the fingerprint that matches the installed APK, Android sign-in
-   fails with `Account reauth failed` / `UNREGISTERED_ON_API_CONSOLE`, which
-   Google Play services reports as a cancellation.
-5. Rebuild. The only scope requested is
-   `https://www.googleapis.com/auth/drive.file` (non-sensitive: read/write to
-   the files this app creates, including the visible `Dayflow` folder). Add that
-   same scope under the consent screen's **Data Access** tab. Do not request the
-   full `https://www.googleapis.com/auth/drive` scope: it is restricted, so
-   Google requires verification and an External app in Testing will not reliably
-   grant it — the symptom is a `403` on the first Drive call that shows up as
-   "Reconnect".
+How it works: every record is one row, keyed by its id, with the record's own
+`updatedAt`. A deleted record is a row with `deleted = true`. The newer
+`updatedAt` wins both in the app merge and in a database trigger, so two devices
+pushing at once can never move the server backwards. Devices pull only rows
+changed since their last sync (ids first, full rows only when newer), and push
+only records saved since their last push. Each device keeps a full local copy
+and works offline.
 
-### Drive sync troubleshooting
+### Cloud sync troubleshooting
 
-Cloud settings has a **Test connection** button that names the step that fails.
-The steps it walks are Drive access, the Dayflow folder, and the backup file.
+Settings -> Cloud Sync -> **Test connection** checks setup, account and
+database access, and names the step that fails.
 
 | Symptom | Cause |
 | --- | --- |
-| `redirect_uri_mismatch` | The origin is missing from the Web client's Authorized redirect URIs |
-| "The Google window was blocked" | Pop-ups are blocked for the site |
-| Connects, then flips to "Reconnect" | The token lacks `drive.file`, or a 401 needs one more Reconnect |
-| Android "Account reauth failed" | No Android OAuth client for this APK's signing key |
-| No file in Drive | Nothing has synced yet; press **Sync now** while connected |
+| "The dayflow_records table is missing" | The migration has not been run in the SQL editor |
+| "Signed-in users can't use dayflow_records" | The grants are missing; run the migration again |
+| "Confirm your email first" | The confirmation link has not been opened yet |
+| "Can't reach Supabase" | No connection, or the network blocks `supabase.co` (see below) |
+| "This device is linked to another account" | Sign out, then sign in with the other account; the app asks before replacing this device's data |
+
+Some Indian networks block `*.supabase.co` by DNS (a MeitY order); the browser
+shows a page that says the website has been blocked. A device using encrypted
+DNS (Chrome Secure DNS, Android Private DNS) is not affected.
 
 ## Project Structure
 
 ```
 src/
-  App.tsx                  # Root component, state, and storage orchestration
-  main.tsx                 # Vite entry point
+  App.tsx                  # Root component: all state, load/save to localStorage, handlers
+  main.tsx                 # Entry: one-time profile migration, then mount
   index.css                # Tailwind and global styles
   types.ts                 # All TypeScript domain types
   components/
-    Header.tsx             # Top bar: brand, theme, notifications, auth
-    BottomNav.tsx          # Mobile bottom navigation + FAB
-    Sidebar.tsx            # Desktop sidebar navigation
-    DateBar.tsx            # Date navigation for the Today view
-    TaskCard.tsx           # Task list item
-    TaskModal.tsx          # Create / edit task
-    TimelineView.tsx       # Time-based task layout
-    FocusRoom.tsx          # Pomodoro timer
-    CategoriesView.tsx     # Category management
-    StatsView.tsx          # Productivity stats
-    FinanceView.tsx        # Finance dashboard
-    FinanceModal.tsx       # Add / edit transaction
-    DebtModal.tsx          # Add / edit debt
-    BillTemplateModal.tsx  # Add / edit bill template
-    FinanceAlertBanner.tsx # Budget threshold alerts
-    NotificationBanner.tsx # Reminder alerts
-    SettingsModal.tsx      # Notification, reminder and cloud settings
-    CloudSyncSection.tsx   # Google Drive connect / sync / restore UI
+    Header.tsx, Sidebar.tsx, BottomNav.tsx   # Shell and navigation (+ quick add)
+    DateBar.tsx, DailyPlanCard.tsx, QuickAddBar.tsx, TaskCard.tsx
+    TodayHabitsCard.tsx, TodayAlarmCard.tsx, TodayDiaryCard.tsx  # Today screen
+    CalendarView.tsx, TimelineView.tsx, FocusRoom.tsx
+    GoalsView.tsx, HabitsView.tsx, AlarmsView.tsx, DiaryView.tsx
+    CategoriesView.tsx, StatsView.tsx
+    FinanceView.tsx        # Money tab: ledger, daily/weekly/monthly, bills, savings, debts
+    ledger/                # Accounts, transfers, history, account detail
+    *Modal.tsx             # Task, habit, goal, diary, finance, debt, bill, savings, settings
+    AlarmRingOverlay.tsx   # In-app ringing alarm
+    AppLockScreen.tsx      # Biometric lock (Android)
+    BankSmsInbox.tsx       # Bank spend inbox (off on main, see below)
+    CloudSyncSection.tsx   # Cloud sync sign-in / sync / restore / test
     ReminderReliabilityCard.tsx # Android permission + exact-alarm nudge
-    ui/                    # Button, Card, Dropdown, Toast primitives
+    MonthlyReportCard.tsx  # Month summary with CSV / PDF export
+    ui/                    # Button, Card, Dropdown, CategorySelect, Toast
   hooks/
-    useCloudSync.ts        # Google auth state, auto sync triggers, merge/restore
+    useCloudSync.ts        # Sign-in state, auto sync triggers, merge/restore
   services/
+    cloudSyncService.ts    # Supabase client, sign-in, record pull/push
     notificationService.ts # Browser/PWA notifications (web fallback)
-    nativeNotificationService.ts # Android alarms, channels, tap listeners
-    googleAuthService.ts   # Google sign-in + token cache
-    driveSyncService.ts    # Drive REST calls for the Dayflow snapshot file
+    nativeNotificationService.ts # Android reminder notifications and channels
+    dayflowAlarm.ts        # Native alarm, music, backup-share plugin wrapper
+    homeWidgets.ts         # Android home-screen widget updates
+    appLock.ts             # Biometric unlock
+    bankSms.ts             # Bank SMS plugin wrapper (native side not on main)
     audioService.ts        # Sound and speech playback
-  lib/
-    cn.ts                  # className helper
-    persistence.ts         # Storage keys, snapshots, tombstones, device id
-    syncMerge.ts           # Record-level merge + tombstone handling
-    reminders.ts           # Platform-agnostic reminder planning
-    platform.ts            # Native/web detection helpers
-    financeRecurrence.ts   # Materialize recurring transactions
-    billMaterializer.ts    # Materialize monthly bill payments
-    budgetAlerts.ts        # 80% / 100% budget threshold logic
-    financeInsights.ts     # Finance stats helpers
+  lib/                     # Pure logic, unit-tested (*.test.ts next to each file)
+    persistence.ts, syncMerge.ts, singleProfile.ts  # Storage, sync merge, migration
+    cloudRecords.ts                                 # Envelope <-> Supabase rows, push/pull plan
+    backup.ts, localBackupFolder.ts                 # JSON export/import, auto backup
+    ledger.ts, money.ts, savingsLedger.ts           # Accounts, balances, paise maths
+    financeRecurrence.ts, billMaterializer.ts, budgetAlerts.ts
+    financeInsights.ts, monthlyReport.ts, simplePdf.ts, merchantCategory.ts
+    bankSmsParse.ts, bankSmsInbox.ts
+    reminders.ts, alarms.ts, sounds.ts, localMusic.ts
+    habits.ts, habitStyle.ts, taskRecurrence.ts, quickAdd.ts
+    dailyPlan.ts, timeBlocks.ts, widgetSnapshot.ts
+    diary.ts, diaryImages.ts, appLock.ts, appLockSession.ts
+    platform.ts, features.ts, dateFormat.ts, oauthRedirect.ts, cn.ts
   data/
     initialCategories.ts   # Default categories
-    initialTasks.ts        # Default tasks
-    financeCategories.ts   # Finance categories and default payment method
+    initialTasks.ts        # Sample day (ids must match STARTER_TASK_IDS)
+    financeCategories.ts   # Finance categories, payment methods, account types
 android/                   # Capacitor Android project (committed)
+  app/src/main/java/com/dayflow/dailytasks/
+    AlarmScheduler.java    # Exact alarms, snooze/dismiss, reschedule
+    DayflowAlarm*.java, DayflowRing*.java   # Plugin, receiver, ring service + screen
+    DayflowBootReceiver.java # Restores alarms after reboot, update, clock change
+    Dayflow*Widget*.java   # Tasks and spend home-screen widgets
+supabase/
+  migrations/              # SQL for the sync table, trigger and RLS
 scripts/
   generate-notification-sounds.mjs # Builds res/raw/*.wav chimes
+  generate-pwa-icons.mjs   # Builds public/icons/*.png
+  install-apk.mjs          # adb install for npm run apk:install
 ```
 
 ## Data and Privacy
 
 - All data is stored in `localStorage` on this device, under one set of keys. There is no local account.
-- Desktop and phone stay in sync by connecting the same Google account. Both write `daily-tasks-sync.json` in a visible `Dayflow` folder in My Drive. Connect and Sync now merge; Restore replaces this device and drops edits that were never uploaded.
-- Clearing app/browser storage erases all tasks and finance data. Use Export JSON or Google Drive backup to keep a copy.
-- Google Drive backup is optional and off until you connect. The `drive.file` scope lets the app read and write only the files it created, so it cannot see the rest of your Drive.
-- The Drive access token is cached on the device with a 55-minute expiry. Background syncs (launch, edits, focus/online, the once-a-minute pull) only ever use that cached token: if it expired they switch to “Reconnect” instead of opening a Google window. Only a tap on Connect, Sync now, Restore, or Test connection may renew it, because renewal can show Google UI. Sync is last-write-wins per record, with deletes tracked for 90 days.
-- An open browser tab pulls changes when it regains focus, comes back online, and once a minute while visible, so an edit on the phone arrives without a reload.
+- Cloud sync is optional and off until you sign in. Desktop and phone stay in sync by signing in to the same account. Sync now merges; Restore replaces this device and drops edits that were never uploaded.
+- Synced data is stored in the app's Supabase database. Row-level security limits every row to the account that owns it; signed-out requests get no access at all.
+- Clearing app/browser storage erases the data on that device. Sign in again (or use Export JSON) to get it back.
+- Sync is last-write-wins per record, with deletes tracked as tombstones. An open browser tab pulls changes when it regains focus, comes back online, and once a minute while visible; the Android app pulls when it comes to the foreground.
+- Signing out leaves the data on the device. Signing in with a different account asks before replacing this device's data, so two accounts are never merged.
 
 ## License
 

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, DATA_SCHEMA_VERSION, getStorageKeys, type SyncData, type SyncEnvelope } from './persistence';
 import {
-  LEGACY_DRIVE_PROFILE_KEY,
   STARTER_TASK_IDS,
   dropUntouchedStarterTasks,
   migrateToSingleProfile,
@@ -115,7 +114,6 @@ describe('migrateToSingleProfile', () => {
     expect(localStorage.getItem(globalKeys.categories)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_KEY)).toBeNull();
     expect(localStorage.getItem('daily_tasks_users_v1')).toBeNull();
-    expect(localStorage.getItem(LEGACY_DRIVE_PROFILE_KEY)).toBe(profileId);
 
     migrateToSingleProfile();
     const again = JSON.parse(localStorage.getItem(globalKeys.tasks) as string) as { id: string }[];
@@ -171,7 +169,6 @@ describe('migrateToSingleProfile', () => {
 
     migrateToSingleProfile();
 
-    expect(localStorage.getItem(LEGACY_DRIVE_PROFILE_KEY)).toBeNull();
     const tasks = JSON.parse(localStorage.getItem(globalKeys.tasks) as string) as { id: string }[];
     expect(tasks.map((item) => item.id)).toEqual(['task-real']);
   });
@@ -208,7 +205,7 @@ describe('dropUntouchedStarterTasks', () => {
 });
 
 describe('starter task ids', () => {
-  it('match the sample day exactly, so it never reaches a sync merge', () => {
+  it('match the sample day exactly, so it never reaches a cloud merge', () => {
     const ids = getInitialTasks().map((task) => task.id).sort();
     expect(ids).toEqual([...STARTER_TASK_IDS].sort());
   });

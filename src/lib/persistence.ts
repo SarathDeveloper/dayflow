@@ -1,6 +1,6 @@
 /**
  * Single source of truth for every localStorage key the app owns, plus the
- * snapshot helpers used by the Google Drive sync engine.
+ * snapshot helpers used by the cloud sync engine.
  *
  * Keeping the key names in one place makes it possible to (a) reload the whole
  * app from storage after a cloud pull and (b) build a sync payload without
@@ -169,9 +169,9 @@ export interface SyncData {
 }
 
 /**
- * The JSON document stored in Google Drive at Dayflow/daily-tasks-sync.json.
- * `tombstones` maps a deleted record id to the ISO timestamp of the deletion so
- * a merge on the other device does not resurrect it.
+ * Everything one side of a sync holds: the records, plus `tombstones`, which
+ * maps a deleted record id to the ISO time of the deletion so a merge on the
+ * other device does not resurrect it.
  */
 export interface SyncEnvelope {
   schemaVersion: number;
@@ -264,12 +264,18 @@ export interface SyncMeta {
   settingsUpdatedAt?: string;
   /**
    * Serialized settings that `settingsUpdatedAt` refers to. Lets the app tell
-   * "the user edited settings" apart from "settings just arrived from Drive",
+   * "the user edited settings" apart from "settings just arrived from the cloud",
    * which would otherwise re-stamp the pulled values as the newest edit.
    */
   settingsSnapshot?: string;
   /** Deleted record id -> ISO timestamp of deletion. */
   tombstones: Record<string, string>;
+  /** Newest `server_updated_at` this device has pulled from Supabase. */
+  cloudCursor?: string;
+  /** Device time the last successful push started. Records saved later are pushed next time. */
+  cloudPushedAt?: string;
+  /** Supabase user this device last synced with. A different user must not merge into it. */
+  cloudUserId?: string;
 }
 
 const TOMBSTONE_TTL_DAYS = 90;
@@ -285,6 +291,9 @@ export function readSyncMeta(keys: StorageKeys): SyncMeta {
     settingsUpdatedAt: meta.settingsUpdatedAt,
     settingsSnapshot: meta.settingsSnapshot,
     tombstones: pruneTombstones(meta.tombstones || {}),
+    cloudCursor: meta.cloudCursor,
+    cloudPushedAt: meta.cloudPushedAt,
+    cloudUserId: meta.cloudUserId,
   };
 }
 
@@ -294,6 +303,9 @@ export function writeSyncMeta(keys: StorageKeys, meta: SyncMeta): void {
     settingsUpdatedAt: meta.settingsUpdatedAt,
     settingsSnapshot: meta.settingsSnapshot,
     tombstones: pruneTombstones(meta.tombstones || {}),
+    cloudCursor: meta.cloudCursor,
+    cloudPushedAt: meta.cloudPushedAt,
+    cloudUserId: meta.cloudUserId,
   });
 }
 

@@ -1,9 +1,9 @@
 /**
- * One device, one set of storage keys, one Drive file.
+ * One device, one set of storage keys.
  *
- * Older builds kept a signed-in profile in its own keys and its own Drive
- * file. This folds that profile into the default keys once, before React
- * reads storage, and remembers the id so the next merge can pull the old file.
+ * Older builds kept a signed-in profile in its own keys. This folds that
+ * profile into the default keys once, before React reads storage. It also
+ * keeps an untouched sample day out of cloud merges.
  */
 import type { BudgetAlertState, SavingsStreakState } from '../types';
 import {
@@ -22,8 +22,8 @@ const CURRENT_USER_KEY = 'daily_tasks_current_user_v1';
 const USERS_KEY = 'daily_tasks_users_v1';
 const MIGRATED_KEY = 'dayflow_single_profile_migrated_v1';
 
-/** Set when a signed-in profile still has a Drive file to merge once. */
-export const LEGACY_DRIVE_PROFILE_KEY = 'dayflow_legacy_drive_profile_v1';
+/** Written by builds that synced through Google Drive. Removed on every boot. */
+const LEGACY_DRIVE_PROFILE_KEY = 'dayflow_legacy_drive_profile_v1';
 
 /** Ids from `getInitialTasks`. A brand-new install has only these. */
 export const STARTER_TASK_IDS = new Set(['task-1', 'task-2', 'task-3', 'task-4', 'task-5']);
@@ -70,23 +70,6 @@ export function dropUntouchedStarterTasks(
   remote: SyncEnvelope | null
 ): SyncEnvelope {
   return preferRealTaskLists(local, remote).left;
-}
-
-export function readLegacyDriveProfileId(): string | null {
-  try {
-    const id = localStorage.getItem(LEGACY_DRIVE_PROFILE_KEY);
-    return id && id.trim() ? id : null;
-  } catch {
-    return null;
-  }
-}
-
-export function clearLegacyDriveProfileId(): void {
-  try {
-    localStorage.removeItem(LEGACY_DRIVE_PROFILE_KEY);
-  } catch {
-    // Storage can be unavailable. The next launch will try the lookup again.
-  }
 }
 
 function readStoredUser(): StoredUser | null {
@@ -225,6 +208,7 @@ function mergeSavingsStreak(globalKey: string, profileKey: string): void {
 /** Fold a signed-in profile into the default keys. Safe to call on every boot. */
 export function migrateToSingleProfile(): void {
   try {
+    localStorage.removeItem(LEGACY_DRIVE_PROFILE_KEY);
     if (localStorage.getItem(MIGRATED_KEY) === '1') return;
   } catch {
     return;
@@ -260,12 +244,10 @@ export function migrateToSingleProfile(): void {
   mergeSavingsStreak(globalKeys.savingsStreak, profileKeys.savingsStreak);
 
   try {
-    localStorage.setItem(LEGACY_DRIVE_PROFILE_KEY, profileId);
     localStorage.removeItem(CURRENT_USER_KEY);
     localStorage.removeItem(USERS_KEY);
     localStorage.setItem(MIGRATED_KEY, '1');
   } catch {
-    // The fold is already on the default keys. Losing the legacy id only
-    // skips the one Drive-file pull; local data is already combined.
+    // The fold is already on the default keys; only the cleanup was skipped.
   }
 }

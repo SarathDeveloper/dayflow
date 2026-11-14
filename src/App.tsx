@@ -139,7 +139,6 @@ import { buildWidgetSnapshot } from './lib/widgetSnapshot';
 import { audioService } from './services/audioService';
 import { habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
-import { CloudSyncSection } from './components/CloudSyncSection';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
@@ -192,7 +191,7 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // One profile on this device. Desktop and phone meet in the same Drive file.
+  // One profile on this device. Desktop and phone meet in the same cloud account.
   const storageKeys = getStorageKeys(null);
   const userTasksKey = storageKeys.tasks;
   const userCategoriesKey = storageKeys.categories;
@@ -671,7 +670,7 @@ export default function App() {
     diaryEntries,
   ]);
 
-  // Google Drive backup
+  // Cloud sync (Supabase)
   const cloudSync = useCloudSync({
     revision: localRevision,
     onDataApplied: () => setDataEpoch((value) => value + 1),
@@ -1371,7 +1370,7 @@ export default function App() {
       const willBeCompleted = !target.completed;
 
       const now = new Date().toISOString();
-      // updatedAt lets Drive sync keep this check over an older copy.
+      // updatedAt lets cloud sync keep this check over an older copy.
       newTasks[targetIndex] = {
         ...target,
         completed: willBeCompleted,
