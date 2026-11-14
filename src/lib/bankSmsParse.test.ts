@@ -126,4 +126,16 @@ describe('parseBankSms', () => {
     expect(smsFingerprint(' VK-HDFCBK ', body)).toBe(smsFingerprint('vk-hdfcbk', body));
     expect(smsFingerprint('VK-HDFCBK', body)).toMatch(/^sms:[0-9a-f]+$/);
   });
+
+  // Reference values computed with the Java rules of BankSmsStore.fingerprint
+  // (feature/bank-sms-notifications). If either side changes, both must.
+  it('matches the Android fingerprint exactly', () => {
+    expect(
+      smsFingerprint('VK-HDFCBK', 'Rs.250.00 debited from a/c XX1234 on 31-10-26 to VPA shop@okaxis'),
+    ).toBe('sms:1afb813ba9126d0e');
+    // Java keeps the non-breaking space; a JS \s would have collapsed it.
+    expect(smsFingerprint('AX-ICICIB', 'INR 1,200 spent on card XX9876 at ZOMATO ₹')).toBe(
+      'sms:f00b3d0fe41b6b1d',
+    );
+  });
 });

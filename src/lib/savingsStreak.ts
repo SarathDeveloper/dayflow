@@ -1,5 +1,6 @@
 import type { SavingsStreakState } from '../types';
 import { todayString } from './ledger';
+import { addRupees } from './money';
 
 /** A dated rupee amount. Savings entries and qualifying transfers both match. */
 export interface SavingsAmount {
@@ -99,7 +100,7 @@ export function getLastNDaysHeatmap(
   const byDate = new Map<string, number>();
   for (const e of entries) {
     if (e.amount <= 0) continue;
-    byDate.set(e.date, (byDate.get(e.date) || 0) + e.amount);
+    byDate.set(e.date, addRupees(byDate.get(e.date) || 0, e));
   }
   const result: { date: string; amount: number; saved: boolean }[] = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -116,7 +117,7 @@ export function getLastNDaysHeatmap(
 export function getMonthlySavingsTotal(entries: SavingsAmount[], month: string): number {
   return entries
     .filter((e) => e.date.startsWith(month) && e.amount > 0)
-    .reduce((s, e) => s + e.amount, 0);
+    .reduce(addRupees, 0);
 }
 
 /**

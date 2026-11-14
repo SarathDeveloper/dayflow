@@ -50,9 +50,8 @@ public class DayflowRingService extends Service {
             return START_NOT_STICKY;
         }
 
-        String id = intent.getStringExtra(AlarmScheduler.EXTRA_ID);
-        if (id != null && id.equals(ringingId) && player != null) return START_NOT_STICKY;
-        ringingId = id;
+        // Every startForegroundService call must be answered with startForeground,
+        // including a repeat delivery of the alarm that is already ringing.
         ensureChannel();
         Notification notification = buildNotification(intent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -60,6 +59,9 @@ public class DayflowRingService extends Service {
         } else {
             startForeground(NOTICE_ID, notification);
         }
+        String id = intent.getStringExtra(AlarmScheduler.EXTRA_ID);
+        if (id != null && id.equals(ringingId) && player != null) return START_NOT_STICKY;
+        ringingId = id;
         acquireWakeLock();
         stopRinging();
         player = AlarmScheduler.buildPlayer(this, intent.getStringExtra(AlarmScheduler.EXTRA_SOUND), true);

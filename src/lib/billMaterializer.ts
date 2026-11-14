@@ -1,4 +1,5 @@
 import type { BillPayment, BillTemplate } from '../types';
+import { currentMonthKey } from './ledger';
 
 /**
  * Clamp a day-of-month to the last valid day for the given month,
@@ -12,6 +13,12 @@ export function clampDueDate(month: string, day: number): string {
 }
 
 const toMonthKey = (dateStr: string) => dateStr.slice(0, 7);
+
+/** Local month a template was created in. `createdAt` is a UTC timestamp. */
+function createdMonthOf(createdAt: string): string {
+  const created = new Date(createdAt);
+  return Number.isNaN(created.getTime()) ? toMonthKey(createdAt) : currentMonthKey(created);
+}
 
 /**
  * Iterate months from `startMonth` through `endMonth` (inclusive), ascending.
@@ -58,7 +65,7 @@ export function materializeBillPayments(
 
   for (const template of templates) {
     if (!template.active) continue;
-    const startMonth = toMonthKey(template.createdAt.slice(0, 7) + '-01');
+    const startMonth = createdMonthOf(template.createdAt);
     const start = startMonth < currentMonth ? startMonth : currentMonth;
     let count = 0;
     for (const month of eachMonth(start, currentMonth)) {

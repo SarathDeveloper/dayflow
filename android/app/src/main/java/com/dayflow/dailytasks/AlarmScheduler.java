@@ -29,6 +29,8 @@ public final class AlarmScheduler {
     static final String KEY_PLANS = "plans";
     static final String KEY_EVENTS = "events";
     static final String KEY_MUSIC_NAME = "music_name";
+    /** Set on a plan while it is snoozed, so a timezone rebuild keeps the snooze time. */
+    static final String KEY_SNOOZED = "snoozed";
     static final String MUSIC_FILE = "reminder-music";
     static final int MAX_MUSIC_BYTES = 15 * 1024 * 1024;
 
@@ -69,6 +71,32 @@ public final class AlarmScheduler {
             if (at <= System.currentTimeMillis()) continue;
             schedule(context, plan, at);
         }
+    }
+
+    /**
+     * Re-registers the stored plans after the wall clock moved under them. After a
+     * timezone change, a repeating alarm's next ring is recomputed from its rule,
+     * so 07:00 stays 07:00 local. Task and habit plans keep their instant; the app
+     * rebuilds them from its own data the next time it opens.
+     */
+    static void restoreAfterTimezoneChange(Context context) {
+        JSONArray plans = readPlans(context);
+        long now = System.currentTimeMillis();
+        boolean changed = false;
+        for (int i = 0; i < plans.length(); i++) {
+            JSONObject plan = plans.optJSONObject(i);
+            if (plan == null || !"alarm".equals(plan.optString("kind")) || plan.optBoolean(KEY_SNOOZED, false)) continue;
+            long following = nextRepeat(plan.optString("time", ""), daysToCsv(plan.optJSONArray("daysOfWeek")), now);
+            if (following <= 0 || following == plan.optLong("at", 0)) continue;
+            try {
+                plan.put("at", following);
+                changed = true;
+            } catch (Exception ignored) {
+                // Keep the stored instant; the app resyncs the rule when it next opens.
+            }
+        }
+        if (changed) prefs(context).edit().putString(KEY_PLANS, plans.toString()).apply();
+        restore(context);
     }
 
     static void schedule(Context context, JSONObject plan, long at) {
@@ -162,6 +190,7 @@ public final class AlarmScheduler {
             if (plan != null && id != null && id.equals(plan.optString("id"))) {
                 try {
                     plan.put("at", at);
+                    plan.put(KEY_SNOOZED, true);
                 } catch (Exception ignored) {
                     // The original plan still rings at its old time if this write fails.
                 }
@@ -190,6 +219,7 @@ public final class AlarmScheduler {
                 if (following > 0) {
                     try {
                         plan.put("at", following);
+                        plan.remove(KEY_SNOOZED);
                     } catch (Exception ignored) {
                         // Leave the stored time; the app resyncs the rule when it next opens.
                     }

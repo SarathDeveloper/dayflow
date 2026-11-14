@@ -58,6 +58,7 @@ import {
   isLedgerError,
   nowTimeString,
   todayString,
+  currentMonthKey,
   newLedgerId,
   upsertTransactions,
   validateEntry,
@@ -573,7 +574,7 @@ export default function App() {
         : [];
 
       // Materialize bill payments up to current month.
-      const currentMonthLoad = new Date().toISOString().slice(0, 7);
+      const currentMonthLoad = currentMonthKey();
       const { payments: materializedPayments } = materializeBillPayments(
         loadedBillTemplates,
         loadedBillPayments,
@@ -2738,7 +2739,7 @@ export default function App() {
   // Budget alert effect: check thresholds when transactions/budgets change.
   // Only fires for the current month to avoid spamming on month navigation.
   useEffect(() => {
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    const currentMonth = currentMonthKey();
     const { alerts, stateUpdates } = checkBudgetAlerts({
       transactions,
       budgets,
@@ -2783,7 +2784,7 @@ export default function App() {
   // Materialize bill payments when templates change (e.g. new template added).
   useEffect(() => {
     if (billTemplates.length === 0) return;
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    const currentMonth = currentMonthKey();
     setBillPayments((prev) => {
       const { payments } = materializeBillPayments(billTemplates, prev, currentMonth);
       // Avoid causing an unnecessary state update if nothing changed.

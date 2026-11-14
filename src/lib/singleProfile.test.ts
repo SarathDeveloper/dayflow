@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, DATA_SCHEMA_VERSION, getStorageKeys, type SyncData, type SyncEnvelope } from './persistence';
 import {
   LEGACY_DRIVE_PROFILE_KEY,
+  STARTER_TASK_IDS,
   dropUntouchedStarterTasks,
   migrateToSingleProfile,
   preferRealTaskLists,
 } from './singleProfile';
+import { getInitialTasks } from '../data/initialTasks';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -202,5 +204,12 @@ describe('dropUntouchedStarterTasks', () => {
     const paired = preferRealTaskLists(local, remote);
     expect(paired.left.data.tasks.map((item) => item.id)).toEqual(['task-real']);
     expect(paired.right?.data.tasks).toEqual([]);
+  });
+});
+
+describe('starter task ids', () => {
+  it('match the sample day exactly, so it never reaches a sync merge', () => {
+    const ids = getInitialTasks().map((task) => task.id).sort();
+    expect(ids).toEqual([...STARTER_TASK_IDS].sort());
   });
 });

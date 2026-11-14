@@ -83,15 +83,21 @@ public class DayflowRingActivity extends Activity {
         }
     }
 
+    /**
+     * Dismiss or snooze here and stop the service directly. Sending the action
+     * with startForegroundService would oblige the service to call
+     * startForeground, and it may already be gone by the time the user taps.
+     */
     private void send(String action) {
-        Intent service = new Intent(this, DayflowRingService.class);
-        service.setAction(action);
-        DayflowAlarmReceiver.copyExtras(getIntent(), service);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(service);
-        } else {
-            startService(service);
+        Intent fired = getIntent();
+        if (fired != null && fired.getStringExtra(AlarmScheduler.EXTRA_ID) != null) {
+            if (DayflowRingService.ACTION_SNOOZE.equals(action)) {
+                AlarmScheduler.snooze(this, fired, fired.getIntExtra(AlarmScheduler.EXTRA_SNOOZE, 10));
+            } else {
+                AlarmScheduler.dismiss(this, fired);
+            }
         }
+        stopService(new Intent(this, DayflowRingService.class));
         finish();
     }
 

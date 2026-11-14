@@ -5,6 +5,7 @@ import type {
   FinanceTransaction,
   MonthlyBudget,
 } from '../types';
+import { addRupees } from './money';
 
 const toMonthKey = (dateStr: string) => dateStr.slice(0, 7);
 
@@ -31,7 +32,7 @@ export function checkBudgetAlerts(args: {
   if (monthlyBudget && monthlyBudget.limit > 0) {
     const spent = monthTx
       .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     const pct = (spent / monthlyBudget.limit) * 100;
     const key = month;
     const entry = alertState[key] || {};
@@ -71,7 +72,7 @@ export function checkBudgetAlerts(args: {
     if (cb.limit <= 0) continue;
     const spent = monthTx
       .filter((t) => t.type === 'expense' && t.category === cb.category)
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     const pct = (spent / cb.limit) * 100;
     const key = `${month}-${cb.category}`;
     const entry = alertState[key] || {};

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addRupees,
   formatPaise,
   formatRupees,
   fromPaise,
@@ -71,5 +72,19 @@ describe('formatting', () => {
   it('formats rupees with two decimals', () => {
     expect(formatRupees(2500)).toBe('₹2,500.00');
     expect(formatRupees(0)).toBe('₹0.00');
+  });
+});
+
+describe('addRupees', () => {
+  it('adds in whole paise, without float drift', () => {
+    expect([0.1, 0.2].map((amount) => ({ amount })).reduce(addRupees, 0)).toBe(0.3);
+    expect(0.1 + 0.2).not.toBe(0.3);
+  });
+
+  it('lets a budget reach exactly 100%', () => {
+    // Plain float addition gives 99.99999999999999 here, so the 100% alert never fired.
+    const amounts = [0.02, 64.07, 35.91];
+    expect(amounts.reduce((sum, amount) => sum + amount, 0)).toBeLessThan(100);
+    expect(amounts.map((amount) => ({ amount })).reduce(addRupees, 0)).toBe(100);
   });
 });

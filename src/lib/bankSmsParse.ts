@@ -24,10 +24,22 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 /**
  * Stable id for one SMS text. Must match BankSmsStore.fingerprint on Android
  * (FNV-1a 64-bit over the trimmed, lowercased address and body).
+ *
+ * Normalize exactly as Java does: `String.trim()` strips only chars <= U+0020
+ * and Java's `\s` is ASCII whitespace only. JS `trim()` and `\s` also match
+ * U+00A0 and other Unicode spaces, which would give the same text two ids.
  */
 export function smsFingerprint(address: string, body: string): string {
-  const normalized = `${address}\n${body}`.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normalized = javaTrim(`${address}\n${body}`).toLowerCase().replace(/[ \t\n\v\f\r]+/g, ' ');
   return `sms:${fnv1a64(normalized)}`;
+}
+
+function javaTrim(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) start++;
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) end--;
+  return value.slice(start, end);
 }
 
 export function parseBankSms(message: RawBankSms): ParsedBankSms | null {

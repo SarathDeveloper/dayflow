@@ -18,6 +18,15 @@ export function fromPaise(paise: number): number {
   return paise / 100;
 }
 
+/**
+ * Reducer that adds rupee amounts in whole paise: `list.reduce(addRupees, 0)`.
+ * Plain float addition drifts (0.1 + 0.2 !== 0.3), which can leave a budget at
+ * 99.99999% and skip its alert.
+ */
+export function addRupees(sum: number, item: { amount: number }): number {
+  return fromPaise(toPaise(sum) + toPaise(item.amount));
+}
+
 /** Round a rupee amount to two decimals (half away from zero). */
 export function roundRupees(rupees: number): number {
   return fromPaise(toPaise(rupees));

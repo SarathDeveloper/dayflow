@@ -1,5 +1,6 @@
 import type { FinanceTransaction } from '../types';
 import { todayString } from './ledger';
+import { addRupees } from './money';
 
 const toISODate = (d: Date) => todayString(d);
 
@@ -22,10 +23,10 @@ export function getLast7DaysData(transactions: FinanceTransaction[]): DayData[] 
     const dayTx = transactions.filter((t) => t.date === dateStr);
     const expense = dayTx
       .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     const income = dayTx
       .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     days.push({
       dateStr,
       dayLabel: d.toLocaleDateString('en-IN', { weekday: 'short' }),
@@ -52,10 +53,10 @@ export function getPrev7DaysTotals(transactions: FinanceTransaction[]): {
     const dayTx = transactions.filter((t) => t.date === dateStr);
     expense += dayTx
       .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     income += dayTx
       .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
   }
   return { expense, income };
 }
@@ -80,7 +81,7 @@ export function getDailySpendForMonth(
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     const amount = transactions
       .filter((t) => t.date === dateStr && t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce(addRupees, 0);
     result.push({ date: dateStr, day, amount });
   }
   return result;
@@ -118,7 +119,7 @@ export function getMonthOverMonthCompare(
   );
 
   const sumBy = (list: FinanceTransaction[]) =>
-    list.reduce((s, t) => s + t.amount, 0);
+    list.reduce(addRupees, 0);
 
   const current = sumBy(currentTx);
   const prev = sumBy(prevTx);

@@ -41,6 +41,9 @@ export const nowTimeString = (now: Date = new Date()): string =>
 
 export const monthKeyOf = (dateStr: string): string => dateStr.slice(0, 7);
 
+/** Local `YYYY-MM`. `toISOString()` is UTC and is still last month early on the 1st east of UTC. */
+export const currentMonthKey = (now: Date = new Date()): string => monthKeyOf(todayString(now));
+
 export function shiftMonthKey(monthKey: string, offset: number): string {
   const [y, m] = monthKey.split('-').map(Number);
   const d = new Date(y, m - 1 + offset, 1);
