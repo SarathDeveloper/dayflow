@@ -8,7 +8,8 @@ import type { DailyProgress, ProgressAreaKey, WeeklyConsistency } from '../lib/p
 interface TodayProgressCardProps {
   progress: DailyProgress;
   weekly: WeeklyConsistency;
-  isToday: boolean;
+  /** Where the selected date sits relative to today. */
+  when: 'past' | 'today' | 'future';
 }
 
 const AREA_ICON: Record<ProgressAreaKey, React.ElementType> = {
@@ -60,9 +61,36 @@ const ScoreRing: React.FC<{ percent: number | null }> = ({ percent }) => {
 };
 
 /** One daily score from habits, tasks, focus time and goals, with the week's consistency. */
-export const TodayProgressCard: React.FC<TodayProgressCardProps> = ({ progress, weekly, isToday }) => {
+export const TodayProgressCard: React.FC<TodayProgressCardProps> = ({ progress, weekly, when }) => {
   const [showMissed, setShowMissed] = useState(false);
   const { percent, areas, best, missed } = progress;
+  const isToday = when === 'today';
+
+  // A future day has nothing to score yet: show what is planned instead.
+  if (when === 'future') {
+    return (
+      <Card className="p-4 space-y-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+          Planned for {formatShortDate(progress.date)}
+        </p>
+        {missed.length === 0 ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400">Nothing planned yet.</p>
+        ) : (
+          <ul className="space-y-1">
+            {missed.map((item) => (
+              <li key={`${item.kind}-${item.id}`} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                <span className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-500">
+                  {item.kind}
+                </span>
+                <span className="truncate">{item.title}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    );
+  }
+
   const title = isToday ? 'Today’s progress' : `Progress on ${formatShortDate(progress.date)}`;
   const missedLabel = isToday ? 'Still open' : 'Missed';
 

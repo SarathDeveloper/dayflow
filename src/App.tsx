@@ -144,7 +144,7 @@ import { DayflowAlarm } from './services/dayflowAlarm';
 import { clearHomeWidgets, updateHomeWidgets } from './services/homeWidgets';
 import { buildWidgetSnapshot } from './lib/widgetSnapshot';
 import { audioService } from './services/audioService';
-import { habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
+import { canSetCheckIn, habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
@@ -1670,6 +1670,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       ...habits.map((h) => h.id),
       ...habitCheckIns.map((c) => c.id),
       ...diaryEntries.map((entry) => entry.id),
+      ...focusSessions.map((session) => session.id),
     ]);
     if (isNativeAndroid()) void cancelAllTaskReminders();
     const freshTasks = getInitialTasks();
@@ -1698,6 +1699,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setHabitCheckIns([]);
     setAlarms([]);
     setDiaryEntries([]);
+    setFocusSessions([]);
     setRecentlyDeletedDiary(null);
     setIsSettingsOpen(false);
   };
@@ -1995,6 +1997,24 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setIsDiaryModalOpen(true);
   };
 
+  /**
+   * Energy and reflection are set by the evening review. Sending the key
+   * decides: a value sets it, undefined clears it. An ordinary diary edit does
+   * not send them, so it keeps whatever was there.
+   */
+  const withReviewFields = (entry: DiaryEntry, partial: Partial<DiaryEntry>): DiaryEntry => {
+    const next: DiaryEntry = { ...entry };
+    if ('energy' in partial) {
+      if (partial.energy === undefined) delete next.energy;
+      else next.energy = partial.energy;
+    }
+    if ('reflection' in partial) {
+      if (partial.reflection === undefined) delete next.reflection;
+      else next.reflection = partial.reflection;
+    }
+    return next;
+  };
+
   const handleSaveDiaryEntry = (partial: Partial<DiaryEntry>): boolean => {
     const mood = partial.mood && isDiaryMood(partial.mood) ? partial.mood : 'okay';
     const images = sanitizeDiaryImages(partial.images);
@@ -2016,33 +2036,28 @@ export default function App({ skipInitialLock = false }: AppProps) {
     const next = partial.id
       ? diaryEntries.map((entry) =>
           entry.id === partial.id
-            ? {
+            ? withReviewFields({
                 ...entry,
                 date: draft.date,
                 time: draft.time,
                 mood: savedMood,
                 body: draft.body.trim(),
                 images: savedImages,
-                // An evening review sends these; an ordinary edit keeps what was there.
-                ...(partial.energy !== undefined ? { energy: partial.energy } : {}),
-                ...(partial.reflection !== undefined ? { reflection: partial.reflection } : {}),
                 updatedAt: now,
-              }
+              }, partial)
             : entry
         )
       : [
-          {
+          withReviewFields({
             id: newLedgerId('diary'),
             date: draft.date,
             time: draft.time,
             mood: savedMood,
             body: draft.body.trim(),
             images: savedImages,
-            ...(partial.energy !== undefined ? { energy: partial.energy } : {}),
-            ...(partial.reflection !== undefined ? { reflection: partial.reflection } : {}),
             createdAt: now,
             updatedAt: now,
-          },
+          } as DiaryEntry, partial),
           ...diaryEntries,
         ];
     if (!diaryCollectionFits(next)) {
@@ -2103,7 +2118,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
   const handleSetCheckIn = (habitId: string, date: string, patch: HabitCheckInPatch | null) => {
     const today = todayDateString();
-    if (date > today) return;
+    // Future days take only a planned rest day.
+    if (!canSetCheckIn(date, today, patch)) return;
     const habit = habits.find((item) => item.id === habitId);
     if (!habit || habitBlockReason(habit, goals) || !isScheduledOn(habit, date)) return;
 
@@ -2952,7 +2968,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     () => ({ tasks, habits, checkIns: habitCheckIns, goals, focusSessions, settings }),
     [tasks, habits, habitCheckIns, goals, focusSessions, settings],
   );
-  const dayProgress = useMemo(() => dailyProgress(progressInput, selectedDate), [progressInput, selectedDate]);
+  const dayProgress = useMemo(() => dailyProgress(progressInput, selectedDate, todayStr), [progressInput, selectedDate, todayStr]);
   const weekProgress = useMemo(() => weeklyConsistency(progressInput, todayStr), [progressInput, todayStr]);
 
   // Weekly report: due for this week on Sunday, otherwise for the week just ended.
@@ -3081,7 +3097,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
         {activeTab === 'today' && (
           <div className="space-y-5">
             {showReportCard && <WeeklyReportCard weekStart={dueReportWeek} onOpen={() => openWeeklyReport()} />}
-            <TodayProgressCard progress={dayProgress} weekly={weekProgress} isToday={selectedDate === todayStr} />
+            <TodayProgressCard
+              progress={dayProgress}
+              weekly={weekProgress}
+              when={selectedDate === todayStr ? 'today' : selectedDate > todayStr ? 'future' : 'past'}
+            />
             <TodayAlarmCard alarms={alarms} onOpen={() => setActiveTab('alarms')} />
             <TodayHabitsCard
               date={selectedDate}

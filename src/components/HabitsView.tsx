@@ -309,8 +309,10 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                     </button>
                     {days.map((day) => {
                       const future = day.date > today;
-                      // Future days can only be planned as rest days.
-                      const disabled = !day.scheduled || blocked;
+                      // Future days can only be planned as rest days; times-per-week
+                      // habits have no fixed days to rest from.
+                      const disabled =
+                        !day.scheduled || blocked || (future && habit.schedule.type === 'times_per_week');
                       const className = !day.scheduled
                         ? 'bg-slate-100 dark:bg-slate-800'
                         : day.checked
@@ -399,7 +401,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
           })()}
           {progressHabits.map((habit) => {
             const through = monthThrough < monthStart ? monthStart : monthThrough;
-            const recovery = habitRecovery(habit, checkIns, today);
+            const recovery = habitRecovery(habit, checkIns, today, goals);
             const completion = habitCompletion(habit, checkIns, monthStart, through);
             const streak = habitStreak(habit, checkIns, today);
             const longest = longestStreak(habit, checkIns, today);
@@ -442,7 +444,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                   <Stat label="Streak" value={streak > 0 ? `${streak}${unit}` : '—'} />
                   <Stat label="Longest" value={longest > 0 ? `${longest}${unit}` : '—'} />
                 </div>
-                {habit.schedule.type !== 'times_per_week' && (
+                {habit.schedule.type !== 'times_per_week' && !habitBlockReason(habit, goals) && (
                   <p
                     className={`text-[11px] font-medium ${
                       recovery.status === 'fresh-start'

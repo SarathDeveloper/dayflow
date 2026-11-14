@@ -8,7 +8,7 @@
  */
 import type { FocusSession, Goal, Habit, HabitCheckIn, NotificationSettings, Task } from '../types';
 import { focusMinutesOn, formatMinutes } from './focusSessions';
-import { addDays, checkInOn, isComplete, isDueToday, isSkipped } from './habits';
+import { addDays, checkInOn, habitBlockedSince, isComplete, isDueToday, isScheduledOn, isSkipped, localDateString } from './habits';
 
 export const DEFAULT_FOCUS_GOAL_MINUTES = 50;
 
@@ -58,15 +58,37 @@ function pct(done: number, total: number): number {
   return total <= 0 ? 0 : Math.round((Math.min(done, total) / total) * 100);
 }
 
-export function dailyProgress(input: ProgressInput, date: string): DailyProgress {
+/**
+ * Did this habit count on `date`? As it was then: archiving it or finishing its
+ * goal later does not rewrite earlier days. A rest day never counts.
+ * A times-per-week habit has no fixed days: on past days it counts only when
+ * it was done (the weekly report scores the quota); today it counts while the
+ * week's quota is still open.
+ */
+function habitCountsOn(habit: ProgressInput['habits'][number], date: string, input: ProgressInput, today: string): boolean {
+  const blockedSince = habitBlockedSince(habit, input.goals);
+  if (blockedSince && date >= blockedSince) return false;
+  if (!isScheduledOn(habit, date)) return false;
+  const entry = checkInOn(habit.id, input.checkIns, date);
+  if (isSkipped(entry)) return false;
+  if (habit.schedule.type !== 'times_per_week') return true;
+  if (isComplete(habit, entry)) return true;
+  return date === today && isDueToday(habit, date, input.goals, input.checkIns);
+}
+
+function firstFocusDate(sessions: FocusSession[]): string | null {
+  let first: string | null = null;
+  for (const session of sessions) if (!first || session.date < first) first = session.date;
+  return first;
+}
+
+/** `today` decides how times-per-week habits count; it defaults to `date`. */
+export function dailyProgress(input: ProgressInput, date: string, today: string = date): DailyProgress {
   const areas: ProgressArea[] = [];
   const missed: MissedItem[] = [];
 
-  // Habits due that day; a rest day (skip) is left out.
-  const dueHabits = input.habits.filter((habit) => {
-    if (!isDueToday(habit, date, input.goals, input.checkIns)) return false;
-    return !isSkipped(checkInOn(habit.id, input.checkIns, date));
-  });
+  // Habits that counted that day.
+  const dueHabits = input.habits.filter((habit) => habitCountsOn(habit, date, input, today));
   const doneHabits = dueHabits.filter((habit) => isComplete(habit, checkInOn(habit.id, input.checkIns, date)));
   if (dueHabits.length > 0) {
     areas.push({
@@ -99,10 +121,14 @@ export function dailyProgress(input: ProgressInput, date: string): DailyProgress
     }
   }
 
-  // Focus time against the daily goal (a goal of 0 turns this area off).
+  // Focus time against the daily goal (a goal of 0 turns this area off). It
+  // counts from the first Focus Room session on, and never scores a day on its
+  // own: a day with nothing else due and no focus stays "nothing due".
   const goalMinutes = focusGoalMinutes(input.settings);
-  if (goalMinutes > 0) {
-    const minutes = focusMinutesOn(input.focusSessions, date);
+  const minutes = goalMinutes > 0 ? focusMinutesOn(input.focusSessions, date) : 0;
+  const focusStarted = firstFocusDate(input.focusSessions);
+  const otherAreasDue = areas.length > 0;
+  if (goalMinutes > 0 && (minutes > 0 || (otherAreasDue && focusStarted !== null && date >= focusStarted))) {
     areas.push({
       key: 'focus',
       label: 'Focus',
@@ -114,9 +140,15 @@ export function dailyProgress(input: ProgressInput, date: string): DailyProgress
   }
 
   // Active goals with a linked habit due that day: moved forward if one was done.
+  // A goal finished or paused after `date` was still active that day.
+  const activeOn = (goal: Goal) => {
+    if (goal.status === 'active') return true;
+    const changed = new Date(goal.updatedAt);
+    return !Number.isNaN(changed.getTime()) && localDateString(changed) > date;
+  };
   const goalsDue = input.goals.filter(
     (goal) =>
-      goal.status === 'active' &&
+      activeOn(goal) &&
       goal.startDate <= date &&
       date <= goal.targetDate &&
       dueHabits.some((habit) => habit.goalId === goal.id),
@@ -154,7 +186,7 @@ export interface WeeklyConsistency {
 export function weeklyConsistency(input: ProgressInput, today: string): WeeklyConsistency {
   const days = Array.from({ length: 7 }, (_, index) => {
     const date = addDays(today, index - 7);
-    return { date, percent: dailyProgress(input, date).percent };
+    return { date, percent: dailyProgress(input, date, today).percent };
   });
   const scored = days.filter((day) => day.percent !== null) as { date: string; percent: number }[];
   const percent =

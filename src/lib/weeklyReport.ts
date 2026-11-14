@@ -7,7 +7,7 @@
  */
 import type { Account, FinanceTransaction, Habit, SavingsEntry } from '../types';
 import { focusMinutesBetween } from './focusSessions';
-import { addDays, checkInMap, habitCompletion, habitStartDate, isComplete, weekStartMonday } from './habits';
+import { addDays, checkInMap, habitBlockedSince, habitCompletion, habitStartDate, isComplete, weekStartMonday } from './habits';
 import { addRupees } from './money';
 import { dailyProgress, type ProgressInput } from './progressScore';
 import { countedSavingsAmounts } from './savingsLedger';
@@ -71,15 +71,18 @@ function weekNumbers(input: WeeklyReportInput, from: string, to: string, today: 
   let scheduled = 0;
   let done = 0;
   for (const habit of input.habits) {
-    if (habit.archived || until < from) continue;
-    const stats = habitCompletion(habit, input.checkIns, from, until);
+    // As it was that week: a habit archived (or goal finished) later still counts before that.
+    const blockedSince = habitBlockedSince(habit, input.goals);
+    const habitUntil = blockedSince && blockedSince <= until ? addDays(blockedSince, -1) : until;
+    if (habitUntil < from) continue;
+    const stats = habitCompletion(habit, input.checkIns, from, habitUntil);
     scheduled += stats.scheduled - (habit.schedule.type === 'times_per_week' ? 0 : stats.skipped);
     done += stats.done;
   }
 
   const scores: number[] = [];
   for (let date = from; date <= until; date = addDays(date, 1)) {
-    const score = dailyProgress(input, date).percent;
+    const score = dailyProgress(input, date, today).percent;
     if (score !== null) scores.push(score);
   }
 
@@ -106,7 +109,10 @@ export function buildWeeklyReport(input: WeeklyReportInput, weekStart: string, t
   const prevStart = addDays(weekStart, -7);
   const prevEnd = addDays(weekStart, -1);
   const habits = input.habits
-    .filter((habit) => !habit.archived && habitStartDate(habit) <= weekEnd)
+    .filter((habit) => {
+      const blockedSince = habitBlockedSince(habit, input.goals);
+      return habitStartDate(habit) <= weekEnd && (!blockedSince || blockedSince > weekStart);
+    })
     .map((habit) => {
       const counted = (habit.targetCount ?? 1) > 1 || Boolean(habit.unit?.trim());
       return {

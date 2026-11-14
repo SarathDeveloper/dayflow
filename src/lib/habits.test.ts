@@ -326,3 +326,16 @@ describe('habit completion and longest streak', () => {
     expect(open?.state).toBe('pending');
   });
 });
+
+describe('canSetCheckIn', () => {
+  it('lets a future day take only a planned rest day', async () => {
+    const { canSetCheckIn } = await import('./habits');
+    const today = '2026-11-14';
+    expect(canSetCheckIn('2026-11-14', today, { skipped: false, value: 1 })).toBe(true);
+    expect(canSetCheckIn('2026-11-10', today, { skipped: false, value: 1 })).toBe(true);
+    expect(canSetCheckIn('2026-11-16', today, { skipped: true })).toBe(true);
+    expect(canSetCheckIn('2026-11-16', today, null)).toBe(true);
+    expect(canSetCheckIn('2026-11-16', today, { skipped: false, value: 1 })).toBe(false);
+    expect(canSetCheckIn('2026-11-16', today, { skipped: true, value: 3 })).toBe(false);
+  });
+});

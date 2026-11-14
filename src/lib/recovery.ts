@@ -18,6 +18,7 @@ import {
   isComplete,
   isSkipped,
   matchesSchedule,
+  weeklyQuota,
 } from './habits';
 
 /** How far back missed days are listed. */
@@ -60,13 +61,38 @@ export function missedDays(
   });
 }
 
-function sevenDayConsistency(habit: Habit, checkIns: HabitCheckIn[], today: string): number | null {
-  const stats = habitCompletion(habit, checkIns, addDays(today, -7), addDays(today, -1));
-  const countable = habit.schedule.type === 'times_per_week' ? stats.scheduled : stats.scheduled - stats.skipped;
-  return countable > 0 ? Math.round((Math.min(stats.done, countable) / countable) * 100) : null;
+/**
+ * Countable and done days over the last 7 finished days. A times-per-week
+ * habit gets one weekly quota over the rolling window (clipped to the days it
+ * existed), not two partial calendar weeks.
+ */
+function lastSevenDays(habit: Habit, checkIns: HabitCheckIn[], today: string): { countable: number; done: number; rest: number } {
+  const from = addDays(today, -7);
+  const to = addDays(today, -1);
+  if (habit.schedule.type === 'times_per_week') {
+    const start = habitStartDate(habit);
+    const windowFrom = from > start ? from : start;
+    if (windowFrom > to) return { countable: 0, done: 0, rest: 0 };
+    const map = checkInMap(habit.id, checkIns);
+    const days = eachDate(windowFrom, to);
+    const countable = Math.min(weeklyQuota(habit), days.length);
+    const completes = days.filter((date) => isComplete(habit, map.get(date))).length;
+    const rest = days.filter((date) => isSkipped(map.get(date))).length;
+    return { countable, done: Math.min(completes, countable), rest };
+  }
+  const stats = habitCompletion(habit, checkIns, from, to);
+  const countable = stats.scheduled - stats.skipped;
+  return { countable, done: Math.min(stats.done, countable), rest: stats.skipped };
 }
 
-export function habitRecovery(habit: Habit, checkIns: HabitCheckIn[], today: string): HabitRecovery {
+function sevenDayConsistency(habit: Habit, checkIns: HabitCheckIn[], today: string): number | null {
+  const { countable, done } = lastSevenDays(habit, checkIns, today);
+  return countable > 0 ? Math.round((done / countable) * 100) : null;
+}
+
+/** A blocked habit (archived, or its goal paused or completed) has nothing to recover. */
+export function habitRecovery(habit: Habit, checkIns: HabitCheckIn[], today: string, goals: Goal[] = []): HabitRecovery {
+  if (habitBlockReason(habit, goals)) return { status: 'steady', missed: [], consistency7: null };
   const missed = missedDays(habit, checkIns, today);
   const consistency7 = sevenDayConsistency(habit, checkIns, today);
   if (missed.length === 0) return { status: 'steady', missed, consistency7 };
@@ -104,19 +130,16 @@ export interface OverallConsistency {
 
 /** All active habits together, over the last 7 finished days. */
 export function overallConsistency(habits: Habit[], checkIns: HabitCheckIn[], goals: Goal[], today: string): OverallConsistency {
-  const from = addDays(today, -7);
-  const to = addDays(today, -1);
   let countable = 0;
   let done = 0;
   let restDays = 0;
   let missed = 0;
   for (const habit of habits) {
     if (habitBlockReason(habit, goals)) continue;
-    const stats = habitCompletion(habit, checkIns, from, to);
-    const habitCountable = habit.schedule.type === 'times_per_week' ? stats.scheduled : stats.scheduled - stats.skipped;
-    countable += habitCountable;
-    done += Math.min(stats.done, habitCountable);
-    restDays += stats.skipped;
+    const week = lastSevenDays(habit, checkIns, today);
+    countable += week.countable;
+    done += week.done;
+    restDays += week.rest;
     missed += missedDays(habit, checkIns, today, 7).length;
   }
   return {

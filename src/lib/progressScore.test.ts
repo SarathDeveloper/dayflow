@@ -128,3 +128,52 @@ describe('weeklyConsistency', () => {
     expect(result.percent).toBe(50);
   });
 });
+
+describe('dailyProgress fairness (review fixes)', () => {
+  it('does not score a day from the default focus goal alone, nor before focus was ever recorded', () => {
+    // Default settings ({}): 50-minute goal, but nothing due and no sessions -> nothing to score.
+    expect(dailyProgress({ ...input(), settings: {} }, '2026-11-10').percent).toBeNull();
+    // Habits and tasks all done, no focus session ever recorded -> 100%, not 67%.
+    const perfect = dailyProgress(
+      { ...input({ habits: [habit('read')], checkIns: [check('read', D)], tasks: [task('t', D, true)] }), settings: {} },
+      D,
+    );
+    expect(perfect.percent).toBe(100);
+  });
+
+  it('counts focus from the first recorded session on', () => {
+    const base = { habits: [habit('read')], checkIns: [check('read', D), check('read', '2026-11-15')], settings: {} };
+    const before = dailyProgress({ ...input(base), focusSessions: [focus('2026-11-15', 25)] }, D);
+    expect(before.areas.map((a) => a.key)).toEqual(['habits']);
+    const after = dailyProgress({ ...input(base), focusSessions: [focus('2026-11-12', 25)] }, D);
+    expect(after.areas.find((a) => a.key === 'focus')).toMatchObject({ percent: 0 });
+  });
+
+  it('counts a times-per-week habit on past days only when done, and today while the quota is open', () => {
+    const gym = habit('gym', { schedule: { type: 'times_per_week', timesPerWeek: 3 } });
+    const past = dailyProgress(input({ habits: [gym] }), '2026-11-12', D);
+    expect(past.areas.find((a) => a.key === 'habits')).toBeUndefined();
+    expect(past.missed).toEqual([]);
+    const today = dailyProgress(input({ habits: [gym] }), D, D);
+    expect(today.missed).toEqual([{ kind: 'habit', id: 'gym', title: 'gym' }]);
+  });
+
+  it('keeps past days as they were when a habit is archived or its goal completed later', () => {
+    const archivedToday = habit('read', { archived: true, updatedAt: '2026-11-14T10:00:00.000Z' });
+    expect(dailyProgress(input({ habits: [archivedToday], checkIns: [check('read', '2026-11-13')] }), '2026-11-13', D).percent).toBe(100);
+    expect(dailyProgress(input({ habits: [archivedToday] }), D, D).percent).toBeNull();
+
+    const goal: Goal = {
+      id: 'g',
+      title: 'Fit',
+      startDate: '2026-11-01',
+      targetDate: '2026-12-31',
+      status: 'completed',
+      createdAt: '2026-11-01T06:00:00.000Z',
+      updatedAt: '2026-11-14T10:00:00.000Z',
+    };
+    const linked = habit('gym', { goalId: 'g' });
+    const yesterday = dailyProgress(input({ goals: [goal], habits: [linked], checkIns: [check('gym', '2026-11-13')] }), '2026-11-13', D);
+    expect(yesterday.areas.map((a) => a.key)).toEqual(['habits', 'goals']);
+  });
+});

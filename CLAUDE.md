@@ -60,6 +60,10 @@ features, setup and the Android release process.
   `lib/cloudRecords.ts` and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
 - **Record ids must be unique across all collections.** Tombstones and the
   server row key are the id alone.
+- **History is scored "as it was then".** Progress score, weekly report and
+  recovery treat a habit as blocked only from `habitBlockedSince` (archived /
+  goal paused or completed) onwards; a rest day is a habit check-in with
+  `skipped: true` (future days accept only that, see `canSetCheckIn`).
 - **Supabase keys:** only the URL and publishable key belong in the app (they
   are in the committed `.env`). Never the service_role / secret key.
 - **Signed in = a saved session exists** (`storedAccount()`), not "the startup

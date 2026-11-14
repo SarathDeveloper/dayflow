@@ -101,8 +101,13 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
   const [plan, setPlan] = useState<DailyPlanState>(() => loadDailyPlan(today));
   const [picked, setPicked] = useState<string[]>([]);
   const [carryOver, setCarryOver] = useState<string[] | null>(null);
-  const [mood, setMood] = useState<DiaryMood>(existingReflection?.mood ?? 'good');
-  const [energy, setEnergy] = useState<number | undefined>(existingReflection?.energy);
+  // Null until edited: until then mood and energy show the saved review (or defaults),
+  // read fresh each render, so a review saved on another device is not overwritten.
+  const [moodEdit, setMood] = useState<DiaryMood | null>(null);
+  const [energyEdit, setEnergyEdit] = useState<{ value?: number } | null>(null);
+  const mood: DiaryMood = moodEdit ?? existingReflection?.mood ?? 'good';
+  const energy: number | undefined = energyEdit ? energyEdit.value : existingReflection?.energy;
+  const setEnergy = (value: number | undefined) => setEnergyEdit({ value });
   // Null until edited: until then the fields show the saved review or the defaults.
   const [answers, setAnswers] = useState<DiaryReflection | null>(null);
 
@@ -112,10 +117,8 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
     setCarryOver(null);
     // A new day starts a new review.
     setAnswers(null);
-    setMood(existingReflection?.mood ?? 'good');
-    setEnergy(existingReflection?.energy);
-    // Only when the day changes; the saved review is read through the props above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setMood(null);
+    setEnergyEdit(null);
   }, [today]);
 
   const update = (next: DailyPlanState) => {
@@ -319,6 +322,8 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
       if (ids.length > 0) onRescheduleTasks(ids, { date: tomorrowOf(today) });
       update({ ...plan, reviewed: true });
       setAnswers(null);
+      setMood(null);
+      setEnergyEdit(null);
       setCarryOver(null);
     };
 

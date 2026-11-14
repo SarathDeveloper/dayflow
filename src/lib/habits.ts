@@ -1,4 +1,4 @@
-import type { Goal, Habit, HabitCheckIn, HabitSchedule } from '../types';
+import type { Goal, Habit, HabitCheckIn, HabitSchedule, HabitCheckInPatch } from '../types';
 
 export function localDateString(date: Date): string {
   const y = date.getFullYear();
@@ -113,6 +113,15 @@ export function checkInOn(
   return checkIns.find((entry) => entry.habitId === habitId && entry.date === date);
 }
 
+/**
+ * Today and earlier take any check-in. A future day can only be planned as a
+ * rest day (or have that plan removed): it cannot be marked done in advance.
+ */
+export function canSetCheckIn(date: string, today: string, patch: HabitCheckInPatch | null): boolean {
+  if (date <= today) return true;
+  return patch === null || (patch.skipped === true && !((patch.value ?? 0) > 0));
+}
+
 export function isSkipped(entry?: HabitCheckIn): boolean {
   return Boolean(entry?.skipped);
 }
@@ -128,6 +137,20 @@ export function isComplete(habit: Habit, entry?: HabitCheckIn): boolean {
 /** Skip or a finished check. Used only for streaks. */
 export function keepsStreak(habit: Habit, entry?: HabitCheckIn): boolean {
   return isComplete(habit, entry) || isSkipped(entry);
+}
+
+/**
+ * The local day a habit stopped counting (archived, or its goal paused or
+ * completed), or null while it is active. There is no separate timestamp for
+ * that change, so the record's last update stands in: days before it keep
+ * counting, so history is not rewritten when a goal is completed later.
+ */
+export function habitBlockedSince(habit: Habit, goals: Goal[]): string | null {
+  const reason = habitBlockReason(habit, goals);
+  if (!reason) return null;
+  const source = reason === 'archived' ? habit.updatedAt : goals.find((goal) => goal.id === habit.goalId)?.updatedAt;
+  const parsed = source ? new Date(source) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? localDateString(parsed) : '0000-00-00';
 }
 
 export function habitBlockReason(habit: Habit, goals: Goal[]): 'archived' | 'paused' | 'completed' | null {

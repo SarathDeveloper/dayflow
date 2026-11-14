@@ -37,9 +37,10 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
   const sessionRef = useRef({ mode, durationSec, taskId: selectedTaskId });
   sessionRef.current = { mode, durationSec, taskId: selectedTaskId };
 
+  // A session starts when a timer with time left starts running.
   useEffect(() => {
-    if (isRunning && !startedAtRef.current) startedAtRef.current = new Date();
-  }, [isRunning]);
+    if (isRunning && timeRemaining > 0 && !startedAtRef.current) startedAtRef.current = new Date();
+  }, [isRunning, timeRemaining]);
 
   useEffect(() => {
     if (initialActiveTask) {
@@ -205,7 +206,12 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
       {/* Main Play / Pause Controls */}
       <div className="flex items-center justify-center gap-4">
         <button
-          onClick={() => setIsRunning(!isRunning)}
+          onClick={() => {
+            // Play on a finished timer starts a fresh one instead of
+            // "finishing" (and recording) the same session again.
+            if (!isRunning && timeRemaining === 0) setTimeRemaining(durationSec);
+            setIsRunning(!isRunning);
+          }}
           className={`w-16 h-16 rounded-2xl flex items-center justify-center text-white text-xl font-bold transition-all shadow-xl ${
             isRunning
               ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/30'

@@ -78,3 +78,18 @@ describe('overallConsistency', () => {
     expect(result).toEqual({ percent: 77, missedDays: 3, restDays: 1 });
   });
 });
+
+describe('recovery review fixes', () => {
+  it('scores a times-per-week habit against one quota over the rolling 7 days, any weekday', () => {
+    const gym = habit('gym', { schedule: { type: 'times_per_week', timesPerWeek: 3 } });
+    // Wednesday 18 Nov: the window is Wed 11 .. Tue 17, done Thu, Sat, Mon.
+    const checkIns = doneOn('gym', 12, 14, 16);
+    expect(habitRecovery(gym, checkIns, '2026-11-18').consistency7).toBe(100);
+  });
+
+  it('gives a blocked habit no missed days and no 7-day figure', () => {
+    const goal = { id: 'g', title: 'g', startDate: '2026-11-01', targetDate: '2026-12-31', status: 'completed' as const, createdAt: '', updatedAt: '' };
+    const r = habitRecovery(habit('read', { goalId: 'g' }), [], TODAY, [goal]);
+    expect(r).toEqual({ status: 'steady', missed: [], consistency7: null });
+  });
+});
