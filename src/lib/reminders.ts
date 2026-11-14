@@ -29,6 +29,19 @@ export const MAX_SCHEDULED_REMINDERS = 200;
 /** Ignore reminders that are already within this window of "now". */
 const MIN_LEAD_MS = 30_000;
 
+/** `taskId` of the weekly report notification; tapping it opens the report. */
+export const WEEKLY_REPORT_TASK_ID = 'weekly-report';
+export const WEEKLY_REPORT_HOUR = 19;
+
+/** The next Sunday at 19:00 local time (today, if it is Sunday before 19:00). */
+export function nextWeeklyReportAt(now: Date = new Date()): Date {
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), WEEKLY_REPORT_HOUR, 0, 0, 0);
+  const daysToSunday = (7 - at.getDay()) % 7;
+  at.setDate(at.getDate() + daysToSunday);
+  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 7);
+  return at;
+}
+
 export interface ReminderPlan {
   taskId: string;
   notificationId: number;
@@ -151,6 +164,23 @@ export function buildReminderPlans(
   }
 
   appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs, hasMusic);
+
+  // Sunday-evening nudge to read the weekly report. Part of this plan list,
+  // because the native sync cancels any pending notification not in it.
+  const reportAt = nextWeeklyReportAt(now);
+  if (reportAt.getTime() >= nowMs + MIN_LEAD_MS && !isQuietHours(settings, reportAt)) {
+    const day = `${reportAt.getFullYear()}-${String(reportAt.getMonth() + 1).padStart(2, '0')}-${String(reportAt.getDate()).padStart(2, '0')}`;
+    plans.push({
+      taskId: WEEKLY_REPORT_TASK_ID,
+      notificationId: reserveNotificationId(hashNotificationId(`${WEEKLY_REPORT_TASK_ID}:${day}`), usedIds),
+      fireAt: reportAt,
+      title: 'Your weekly report is ready',
+      body: 'See your habits, focus time and money for the week, compared with last week.',
+      sound: settings.defaultSound === 'voice' || settings.defaultSound === 'music' ? 'chime' : settings.defaultSound,
+      ring: false,
+      occurrenceId: `${WEEKLY_REPORT_TASK_ID}:${day}`,
+    });
+  }
 
   plans.sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime());
   return plans.slice(0, MAX_SCHEDULED_REMINDERS);

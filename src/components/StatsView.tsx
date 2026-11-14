@@ -1,5 +1,5 @@
 import React from 'react';
-import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar, Repeat } from 'lucide-react';
+import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar, Repeat, CalendarRange } from 'lucide-react';
 import { Goal, Habit, HabitCheckIn, Task } from '../types';
 import { habitCompletion, habitStreak, todayDateString, weekStartMonday } from '../lib/habits';
 import { todayString } from '../lib/ledger';
@@ -9,9 +9,11 @@ interface StatsViewProps {
   habits: Habit[];
   checkIns: HabitCheckIn[];
   goals: Goal[];
+  /** Opens the weekly self-improvement report. */
+  onOpenWeeklyReport?: () => void;
 }
 
-export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, goals }) => {
+export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, goals, onOpenWeeklyReport }) => {
   const totalTasks = tasks.length;
   const completedTasks = tasks.filter((t) => t.completed);
   const completedCount = completedTasks.length;
@@ -103,6 +105,16 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, g
           <span>Productivity & Streak Stats</span>
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400">Track your task completion rates and habits</p>
+        {onOpenWeeklyReport && (
+          <button
+            type="button"
+            onClick={onOpenWeeklyReport}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40"
+          >
+            <CalendarRange className="w-4 h-4" />
+            Weekly report
+          </button>
+        )}
       </div>
 
       {/* KPI Cards Grid */}

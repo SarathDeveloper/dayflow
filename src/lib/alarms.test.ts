@@ -110,7 +110,7 @@ describe('reminder ring routing', () => {
 
   it('keeps quiet hours on a reminder that rings until dismissed', () => {
     const plans = buildReminderPlans([taskAt('23:30', { alarm: true })], settings, now);
-    expect(plans).toHaveLength(0);
+    expect(plans.filter((plan) => plan.taskId !== 'weekly-report')).toHaveLength(0);
   });
 
   it('marks an alarm-style reminder for the ring bridge and leaves a chime on the short path', () => {

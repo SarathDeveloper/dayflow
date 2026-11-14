@@ -124,7 +124,7 @@ import {
   unmarkDeleted,
   writeSyncMeta,
 } from './lib/persistence';
-import { buildReminderPlans, describeNextReminder } from './lib/reminders';
+import { WEEKLY_REPORT_TASK_ID, buildReminderPlans, describeNextReminder } from './lib/reminders';
 import { resolveReminderDelivery } from './lib/sounds';
 import {
   alarmDueAt,
@@ -138,6 +138,8 @@ import { hasLocalMusic } from './lib/localMusic';
 import { buildFocusSession } from './lib/focusSessions';
 import { dailyProgress, weeklyConsistency } from './lib/progressScore';
 import { TodayProgressCard } from './components/TodayProgressCard';
+import { WeeklyReportCard, WeeklyReportSheet } from './components/WeeklyReport';
+import { isWeeklyReportSeen, markWeeklyReportSeen, reportWeekStart } from './lib/weeklyReport';
 import { DayflowAlarm } from './services/dayflowAlarm';
 import { clearHomeWidgets, updateHomeWidgets } from './services/homeWidgets';
 import { buildWidgetSnapshot } from './lib/widgetSnapshot';
@@ -520,6 +522,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
   // Undo toast for recently deleted tasks
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ task: Task; index: number } | null>(null);
+  // Week (Monday) shown in the weekly report sheet; null when closed.
+  const [reportWeek, setReportWeek] = useState<string | null>(null);
+  const [reportSeenTick, setReportSeenTick] = useState(0);
 
   // Saves wait until stored data is in state. Writing earlier, during a cloud
   // reload, would persist the previous snapshot over the one just applied.
@@ -821,6 +826,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
             if (task) setActiveAlert({ task, triggeredAt: new Date() });
           },
           onOpened: (taskId) => {
+            if (taskId === WEEKLY_REPORT_TASK_ID) {
+              setActiveTab('today');
+              openWeeklyReportRef.current();
+              return;
+            }
             if (taskId.startsWith('habit:')) {
               setActiveTab('habits');
               return;
@@ -1333,6 +1343,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
   backHandlerRef.current = () => {
     // An open alert or confirmation closes first, as if cancelled.
     if (dismissTopDialog()) return;
+    if (reportWeek) {
+      setReportWeek(null);
+      return;
+    }
     if (ringing) {
       finishRing('dismiss');
       return;
@@ -2915,6 +2929,25 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const dayProgress = useMemo(() => dailyProgress(progressInput, selectedDate), [progressInput, selectedDate]);
   const weekProgress = useMemo(() => weeklyConsistency(progressInput, todayStr), [progressInput, todayStr]);
 
+  // Weekly report: due for this week on Sunday, otherwise for the week just ended.
+  const weeklyInput = useMemo(
+    () => ({ ...progressInput, transactions, savingsEntries, accounts }),
+    [progressInput, transactions, savingsEntries, accounts],
+  );
+  const dueReportWeek = reportWeekStart(todayStr);
+  const hasAnyActivity = tasks.length + habits.length + transactions.length > 0;
+  // reportSeenTick re-reads the device-only "seen" flag after opening.
+  const showReportCard = hasAnyActivity && reportSeenTick >= 0 && !isWeeklyReportSeen(dueReportWeek);
+  const openWeeklyReport = (weekStart: string = dueReportWeek) => {
+    if (weekStart === dueReportWeek) {
+      markWeeklyReportSeen(dueReportWeek);
+      setReportSeenTick((value) => value + 1);
+    }
+    setReportWeek(weekStart);
+  };
+  const openWeeklyReportRef = useRef(openWeeklyReport);
+  openWeeklyReportRef.current = openWeeklyReport;
+
   // Extract all unique tags across tasks
   const allTags = Array.from(new Set(tasks.flatMap((t) => t.tags || []).filter(Boolean)));
 
@@ -3021,6 +3054,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
+            {showReportCard && <WeeklyReportCard weekStart={dueReportWeek} onOpen={() => openWeeklyReport()} />}
             <TodayProgressCard progress={dayProgress} weekly={weekProgress} isToday={selectedDate === todayStr} />
             <TodayAlarmCard alarms={alarms} onOpen={() => setActiveTab('alarms')} />
             <TodayHabitsCard
@@ -3412,7 +3446,13 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
         {/* STATS & STREAK VIEW */}
         {activeTab === 'stats' && (
-          <StatsView tasks={tasks} habits={habits} checkIns={habitCheckIns} goals={goals} />
+          <StatsView
+            tasks={tasks}
+            habits={habits}
+            checkIns={habitCheckIns}
+            goals={goals}
+            onOpenWeeklyReport={() => openWeeklyReport()}
+          />
         )}
 
         {/* PERSONAL FINANCE VIEW */}
@@ -3632,6 +3672,15 @@ export default function App({ skipInitialLock = false }: AppProps) {
       />
 
       {/* Settings Modal */}
+      {reportWeek && (
+        <WeeklyReportSheet
+          input={weeklyInput}
+          today={todayStr}
+          initialWeekStart={reportWeek}
+          onClose={() => setReportWeek(null)}
+        />
+      )}
+
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

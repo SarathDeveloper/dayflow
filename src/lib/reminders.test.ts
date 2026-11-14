@@ -62,6 +62,33 @@ describe('habit reminders', () => {
       updatedAt: '2026-10-01T00:00:00.000Z',
     };
     const linked = { ...item, goalId: 'goal-1' };
-    expect(buildReminderPlans([], settings, now, [linked], [], [goal])).toHaveLength(0);
+    const plans = buildReminderPlans([], settings, now, [linked], [], [goal]);
+    expect(plans.filter((plan) => plan.habitId)).toHaveLength(0);
+  });
+});
+
+describe('weekly report reminder', () => {
+  it('fires on the next Sunday at 19:00, or a week later once that has passed', async () => {
+    const { nextWeeklyReportAt } = await import('./reminders');
+    // Wed 11 Nov 2026 -> Sun 15 Nov 19:00.
+    expect(nextWeeklyReportAt(new Date(2026, 10, 11, 9, 0)).toString()).toBe(new Date(2026, 10, 15, 19, 0).toString());
+    // Sunday before 19:00 -> same day.
+    expect(nextWeeklyReportAt(new Date(2026, 10, 15, 18, 30)).toString()).toBe(new Date(2026, 10, 15, 19, 0).toString());
+    // Sunday after 19:00 -> next Sunday.
+    expect(nextWeeklyReportAt(new Date(2026, 10, 15, 19, 30)).toString()).toBe(new Date(2026, 10, 22, 19, 0).toString());
+  });
+
+  it('is part of the plan list, so the native sync never cancels it', async () => {
+    const { WEEKLY_REPORT_TASK_ID } = await import('./reminders');
+    const plans = buildReminderPlans([], settings, new Date(2026, 10, 11, 9, 0));
+    const weekly = plans.filter((plan) => plan.taskId === WEEKLY_REPORT_TASK_ID);
+    expect(weekly).toHaveLength(1);
+    expect(weekly[0].ring).toBe(false);
+  });
+
+  it('respects quiet hours', () => {
+    const quiet = { ...settings, quietHours: { enabled: true, start: '18:00', end: '07:00' } };
+    const plans = buildReminderPlans([], quiet, new Date(2026, 10, 11, 9, 0));
+    expect(plans.some((plan) => plan.taskId === 'weekly-report')).toBe(false);
   });
 });
