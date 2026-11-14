@@ -1,20 +1,22 @@
 /**
- * Orchestrates Supabase cloud sync: sign-in state, automatic sync triggers and
- * the merge / restore runs. What to pull and push is decided by the pure
- * functions in `lib/cloudRecords`; the network calls live in
- * `services/cloudSyncService`. This hook owns lifecycle and UI state only.
+ * Orchestrates Supabase cloud sync while the app is open: automatic sync
+ * triggers and the merge / restore runs. Sign-in itself happens before the app
+ * mounts (`components/auth/AuthGate`), so this hook always starts with a saved
+ * session. What to pull and push is decided by the pure functions in
+ * `lib/cloudRecords`; the network calls live in `services/cloudSyncService`.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { App as CapApp } from '@capacitor/app';
-import type { Session } from '@supabase/supabase-js';
 import {
   advanceCursor,
   idsToDownload,
+  initialSyncMode,
   localVersions,
   pullStart,
   reconcile,
   restoreFromRows,
   sameSnapshot,
+  type CloudRowMeta,
 } from '../lib/cloudRecords';
 import {
   DATA_SCHEMA_VERSION,
@@ -36,26 +38,18 @@ import {
   currentSession,
   fetchRows,
   getSupabase,
-  hasStoredSession,
   isCloudConfigured,
   pullRowMeta,
   pushRows,
-  signIn as signInRequest,
   signOut as signOutRequest,
-  signUp as signUpRequest,
+  storedAccount,
   testCloudConnection,
   type CloudAccount,
   type CloudCheckStep,
 } from '../services/cloudSyncService';
+import { clearHomeWidgets } from '../services/homeWidgets';
 
-export type CloudSyncStatus =
-  | 'unconfigured'
-  | 'disconnected'
-  | 'idle'
-  | 'syncing'
-  | 'connecting'
-  | 'needs-auth'
-  | 'error';
+export type CloudSyncStatus = 'unconfigured' | 'disconnected' | 'idle' | 'syncing' | 'error';
 
 export interface UseCloudSyncOptions {
   /** Bumped by the app whenever local data changes, so sync can debounce. */
@@ -71,12 +65,8 @@ export interface CloudSyncApi {
   account: CloudAccount | null;
   lastSyncedAt: string | null;
   error: string | null;
-  /** Information that is not an error, e.g. "check your inbox". */
-  notice: string | null;
   configured: boolean;
-  hasSession: boolean;
-  signIn: (email: string, password: string) => Promise<boolean>;
-  signUp: (email: string, password: string) => Promise<boolean>;
+  /** Sync once more, then sign out. The login screen takes over. */
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   restoreFromCloud: () => Promise<void>;
@@ -89,7 +79,7 @@ type SyncMode = 'merge' | 'restore' | 'switch-account';
 const AUTO_SYNC_DEBOUNCE_MS = 4000;
 /** How often an open browser tab checks for edits made on another device. */
 const WEB_PULL_INTERVAL_MS = 60_000;
-const SESSION_ENDED = 'Your session ended. Sign in again to keep syncing.';
+const OFFLINE = 'Offline. Changes are saved on this device and sync when you are back online.';
 
 function buildLocalEnvelope(): SyncEnvelope {
   const keys = getStorageKeys(null);
@@ -109,22 +99,20 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const { revision, onDataApplied, enabled = true } = options;
   const configured = isCloudConfigured();
 
-  const [account, setAccount] = useState<CloudAccount | null>(null);
+  const [account, setAccount] = useState<CloudAccount | null>(() => (configured ? storedAccount() : null));
   const [status, setStatus] = useState<CloudSyncStatus>(() => {
     if (!configured) return 'unconfigured';
-    return hasStoredSession() ? 'idle' : 'disconnected';
+    return storedAccount() ? 'idle' : 'disconnected';
   });
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(
     () => readSyncMeta(getStorageKeys(null)).lastSyncedAt ?? null,
   );
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const busyRef = useRef(false);
+  const activeRunRef = useRef<Promise<void> | null>(null);
   const pendingModeRef = useRef<SyncMode | null>(null);
-  const signedInRef = useRef(configured && hasStoredSession());
   const signingOutRef = useRef(false);
-  const authFlowRef = useRef(false);
   const onDataAppliedRef = useRef(onDataApplied);
   onDataAppliedRef.current = onDataApplied;
 
@@ -151,186 +139,166 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     [writeMeta],
   );
 
+  /**
+   * Pull rows changed since `cursor` (or use `preloaded`), merge them into this
+   * device, push what the server lacks, and store the new cursor.
+   */
+  const mergeWithCloud = useCallback(
+    async (
+      userId: string,
+      startedAt: string,
+      position: { cursor?: string; pushedAt?: string },
+      preloaded?: CloudRowMeta[],
+    ) => {
+      const local = buildLocalEnvelope();
+      const metaRows = preloaded ?? (await pullRowMeta(userId, pullStart(position.cursor)));
+      const rows = await fetchRows(userId, idsToDownload(metaRows, localVersions(local)));
+      const { remote, push } = reconcile(local, { meta: metaRows, rows }, position.pushedAt);
+      await pushRows(userId, push);
+
+      // The user may have edited while the network calls ran. Merge the pulled
+      // rows into what is stored now, not into the earlier read. Those edits
+      // are newer than `startedAt`, so the next run pushes them.
+      const fresh = buildLocalEnvelope();
+      const paired = preferRealTaskLists(fresh, remote);
+      const merged = mergeEnvelopes(paired.left, paired.right);
+      const patch = {
+        cloudCursor: advanceCursor(position.cursor, metaRows),
+        cloudPushedAt: startedAt,
+        cloudUserId: userId,
+      };
+      if (sameSnapshot(fresh, merged)) writeMeta(patch);
+      else applyEnvelope(merged, patch);
+    },
+    [applyEnvelope, writeMeta],
+  );
+
   const runSync = useCallback(
-    async (mode: SyncMode, opts: { silent?: boolean } = {}): Promise<void> => {
-      if (!enabled || !configured) return;
+    (mode: SyncMode, opts: { silent?: boolean } = {}): Promise<void> => {
+      if (!enabled || !configured) return Promise.resolve();
       if (busyRef.current) {
         // A restore or account switch outranks a queued merge.
         if (pendingModeRef.current === null || mode !== 'merge') pendingModeRef.current = mode;
-        return;
+        return activeRunRef.current ?? Promise.resolve();
       }
       busyRef.current = true;
-      try {
-        const session = await currentSession();
-        if (!session) {
-          setAccount(null);
-          if (signedInRef.current) {
-            signedInRef.current = false;
-            setStatus('needs-auth');
-            setError(SESSION_ENDED);
+
+      const run = (async () => {
+        try {
+          const session = await currentSession();
+          if (!session) {
+            // Still saved means the token could not be refreshed for lack of
+            // network: stay signed in and try again later.
+            if (storedAccount()) {
+              setStatus('error');
+              setError(OFFLINE);
+            } else {
+              setAccount(null);
+              setStatus('disconnected');
+            }
+            return;
+          }
+          setAccount(accountOf(session));
+          // A background pull must not flip the badge to "Syncing" every minute.
+          if (!opts.silent) {
+            setError(null);
+            setStatus('syncing');
+          }
+
+          const userId = session.user.id;
+          const meta = readSyncMeta(getStorageKeys(null));
+          const sameUser = meta.cloudUserId === userId;
+          if (meta.cloudUserId && !sameUser && mode === 'merge') {
+            // Only a switch confirmed on the login screen may move a device to another account.
+            throw new Error('This device is linked to another account. Sign out and sign in again to switch.');
+          }
+          const startedAt = new Date().toISOString();
+
+          if (mode === 'merge') {
+            await mergeWithCloud(userId, startedAt, {
+              cursor: sameUser ? meta.cloudCursor : undefined,
+              pushedAt: sameUser ? meta.cloudPushedAt : undefined,
+            });
           } else {
-            setStatus('disconnected');
+            const metaRows = await pullRowMeta(userId, null);
+            const rows = await fetchRows(
+              userId,
+              metaRows.filter((row) => !row.deleted).map((row) => row.id),
+            );
+            const restored = restoreFromRows(buildLocalEnvelope(), { meta: metaRows, rows });
+            if (restored) {
+              applyEnvelope(restored, {
+                cloudCursor: advanceCursor(undefined, metaRows),
+                cloudPushedAt: startedAt,
+                cloudUserId: userId,
+              });
+            } else if (mode === 'switch-account') {
+              // The account holds nothing yet. Replacing this device with
+              // nothing could erase the only copy, so upload it instead.
+              await mergeWithCloud(userId, startedAt, {}, metaRows);
+            } else {
+              throw new Error('Nothing is stored in the cloud for this account yet. Use Sync now to upload this device.');
+            }
           }
-          return;
-        }
-        signedInRef.current = true;
-        setAccount(accountOf(session));
-        // A background pull must not flip the badge to "Syncing" every minute.
-        if (!opts.silent) {
+
+          setStatus('idle');
           setError(null);
-          setStatus('syncing');
-        }
-
-        const userId = session.user.id;
-        const meta = readSyncMeta(getStorageKeys(null));
-        const sameUser = meta.cloudUserId === userId;
-        if (meta.cloudUserId && !sameUser && mode === 'merge') {
-          // Only an explicit, confirmed sign-in may move a device to another account.
-          throw new Error('This device is linked to another account. Sign out, then sign in again to switch.');
-        }
-        const startedAt = new Date().toISOString();
-
-        if (mode === 'restore' || mode === 'switch-account') {
-          const metaRows = await pullRowMeta(userId, null);
-          const rows = await fetchRows(
-            userId,
-            metaRows.filter((row) => !row.deleted).map((row) => row.id),
-          );
-          const restored = restoreFromRows(
-            buildLocalEnvelope(),
-            { meta: metaRows, rows },
-            { allowEmpty: mode === 'switch-account' },
-          );
-          if (!restored) {
-            throw new Error('Nothing is stored in the cloud for this account yet. Use Sync now to upload this device.');
+        } catch (e) {
+          if (e instanceof CloudAuthError) {
+            // The server rejected the session. Sign out so the login screen
+            // takes over; the data stays on this device.
+            pendingModeRef.current = null;
+            setError(e.message);
+            void signOutRequest();
+          } else {
+            setStatus('error');
+            setError(e instanceof Error ? e.message : String(e));
           }
-          applyEnvelope(restored, {
-            cloudCursor: advanceCursor(undefined, metaRows),
-            cloudPushedAt: startedAt,
-            cloudUserId: userId,
-          });
-        } else {
-          const cursor = sameUser ? meta.cloudCursor : undefined;
-          const pushedAt = sameUser ? meta.cloudPushedAt : undefined;
-          const local = buildLocalEnvelope();
-          const metaRows = await pullRowMeta(userId, pullStart(cursor));
-          const rows = await fetchRows(userId, idsToDownload(metaRows, localVersions(local)));
-          const { remote, push } = reconcile(local, { meta: metaRows, rows }, pushedAt);
-          await pushRows(userId, push);
-
-          // The user may have edited while the network calls ran. Merge the
-          // pulled rows into what is stored now, not into the earlier read.
-          // Those edits are newer than `startedAt`, so the next run pushes them.
-          const fresh = buildLocalEnvelope();
-          const paired = preferRealTaskLists(fresh, remote);
-          const merged = mergeEnvelopes(paired.left, paired.right);
-          const patch = {
-            cloudCursor: advanceCursor(cursor, metaRows),
-            cloudPushedAt: startedAt,
-            cloudUserId: userId,
-          };
-          if (sameSnapshot(fresh, merged)) writeMeta(patch);
-          else applyEnvelope(merged, patch);
-        }
-
-        setStatus('idle');
-        setError(null);
-      } catch (e) {
-        if (e instanceof CloudAuthError) {
+        } finally {
+          busyRef.current = false;
+          activeRunRef.current = null;
+          const pending = pendingModeRef.current;
           pendingModeRef.current = null;
-          setStatus('needs-auth');
-          setError(e.message);
-        } else {
-          setStatus('error');
-          setError(e instanceof Error ? e.message : String(e));
+          if (pending && !signingOutRef.current) void runSync(pending, { silent: true });
         }
-      } finally {
-        busyRef.current = false;
-        const pending = pendingModeRef.current;
-        pendingModeRef.current = null;
-        if (pending) void runSync(pending, { silent: true });
-      }
+      })();
+      activeRunRef.current = run;
+      return run;
     },
-    [applyEnvelope, configured, enabled, writeMeta],
+    [applyEnvelope, configured, enabled, mergeWithCloud],
   );
 
-  /**
-   * After any sign-in: a device last synced with a different account must not
-   * merge two people's data. Ask, then replace this device's data or back out.
-   */
-  const afterSignIn = useCallback(
-    async (session: Session): Promise<boolean> => {
-      const previous = readSyncMeta(getStorageKeys(null)).cloudUserId;
-      const switching = Boolean(previous && previous !== session.user.id);
-      if (switching) {
-        const replace = window.confirm(
-          'This device was last synced with a different account. Replace the data on this device with this account’s data?\n\nChanges not yet synced to the other account will be lost. Cancel signs out again.',
-        );
-        if (!replace) {
-          signingOutRef.current = true;
-          await signOutRequest();
-          signingOutRef.current = false;
-          signedInRef.current = false;
-          setAccount(null);
-          setStatus('disconnected');
-          return false;
-        }
-      }
-      signedInRef.current = true;
-      setAccount(accountOf(session));
-      setStatus('idle');
-      setError(null);
-      await runSync(switching ? 'switch-account' : 'merge');
-      return true;
-    },
-    [runSync],
-  );
-
-  // Follow auth changes made outside this hook: the session restored on launch,
-  // a sign-in from the email confirmation link (web), a refresh that failed.
+  // Keep the account shown in Settings current.
   useEffect(() => {
     const supabase = getSupabase();
     if (!supabase) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         setAccount(null);
-        if (signingOutRef.current || !signedInRef.current) {
-          setStatus('disconnected');
-        } else {
-          setStatus('needs-auth');
-          setError(SESSION_ENDED);
-        }
-        signedInRef.current = false;
+        setStatus('disconnected');
         return;
       }
-      if (!session) {
-        if (event === 'INITIAL_SESSION') {
-          signedInRef.current = false;
-          setStatus((current) => (current === 'idle' ? 'disconnected' : current));
-        }
-        return;
-      }
-      setAccount(accountOf(session));
-      if (event === 'SIGNED_IN' && !authFlowRef.current) {
-        // Not ours (e.g. the confirmation link). Deferred: an auth callback
-        // must not await other Supabase calls.
-        setTimeout(() => void afterSignIn(session), 0);
-      }
+      const next = accountOf(session);
+      if (next) setAccount(next);
     });
     return () => data.subscription.unsubscribe();
-  }, [afterSignIn]);
+  }, []);
 
-  // First sync on launch.
+  // First sync on mount. A different account than last time only gets this
+  // far after the switch was confirmed on the login screen.
   useEffect(() => {
-    if (!configured || !enabled || !signedInRef.current) return;
-    void runSync('merge', { silent: true });
+    if (!configured || !enabled) return;
+    const signedIn = storedAccount();
+    if (!signedIn) return;
+    const mode = initialSyncMode(readSyncMeta(getStorageKeys(null)).cloudUserId, signedIn.id);
+    void runSync(mode, { silent: mode === 'merge' });
     // Only on mount. Later edits go through the revision debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured]);
 
   // Debounced push after local edits.
   useEffect(() => {
-    if (!configured || !enabled || !signedInRef.current) return;
+    if (!configured || !enabled || !storedAccount()) return;
     const timer = setTimeout(() => void runSync('merge', { silent: true }), AUTO_SYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -340,24 +308,27 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   useEffect(() => {
     if (!configured || !isNative() || !enabled) return;
     const supabase = getSupabase();
+    let disposed = false;
     let remove: (() => void) | null = null;
     void CapApp.addListener('appStateChange', ({ isActive }) => {
       if (isActive) {
         void supabase?.auth.startAutoRefresh();
-        if (signedInRef.current) void runSync('merge', { silent: true });
+        if (storedAccount()) void runSync('merge', { silent: true });
       } else {
         void supabase?.auth.stopAutoRefresh();
       }
     }).then((handle) => {
-      remove = () => {
-        try {
-          void handle.remove();
-        } catch {
-          // already detached
-        }
-      };
+      // The app can unmount (sign-out) before the listener is attached.
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
+      remove = () => void handle.remove();
     });
-    return () => remove?.();
+    return () => {
+      disposed = true;
+      remove?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, enabled]);
 
@@ -366,7 +337,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   useEffect(() => {
     if (!configured || isNative() || !enabled || typeof document === 'undefined') return;
     const pull = () => {
-      if (document.visibilityState !== 'visible' || !signedInRef.current) return;
+      if (document.visibilityState !== 'visible' || !storedAccount()) return;
       void runSync('merge', { silent: true });
     };
     const onVisibility = () => {
@@ -385,66 +356,21 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, enabled]);
 
-  const signIn = useCallback(
-    async (email: string, password: string): Promise<boolean> => {
-      setStatus('connecting');
-      setError(null);
-      setNotice(null);
-      authFlowRef.current = true;
-      try {
-        const session = await signInRequest(email, password);
-        authFlowRef.current = false;
-        return await afterSignIn(session);
-      } catch (e) {
-        setStatus('disconnected');
-        setError(e instanceof Error ? e.message : String(e));
-        return false;
-      } finally {
-        authFlowRef.current = false;
-      }
-    },
-    [afterSignIn],
-  );
-
-  const signUp = useCallback(
-    async (email: string, password: string): Promise<boolean> => {
-      setStatus('connecting');
-      setError(null);
-      setNotice(null);
-      authFlowRef.current = true;
-      try {
-        const session = await signUpRequest(email, password);
-        authFlowRef.current = false;
-        if (!session) {
-          setStatus('disconnected');
-          setNotice('Account created. Open the confirmation link Supabase emailed you, then sign in here.');
-          return true;
-        }
-        return await afterSignIn(session);
-      } catch (e) {
-        setStatus('disconnected');
-        setError(e instanceof Error ? e.message : String(e));
-        return false;
-      } finally {
-        authFlowRef.current = false;
-      }
-    },
-    [afterSignIn],
-  );
-
   const disconnect = useCallback(async () => {
+    // Let a running sync finish, then upload anything left, then sign out.
+    // A failed final sync (offline) still signs out; the data stays here.
+    while (activeRunRef.current) await activeRunRef.current;
+    await runSync('merge');
+    while (activeRunRef.current) await activeRunRef.current;
     signingOutRef.current = true;
     try {
+      // Home-screen widgets would keep showing tasks and spending.
+      await clearHomeWidgets().catch(() => {});
       await signOutRequest();
     } finally {
       signingOutRef.current = false;
-      signedInRef.current = false;
-      setAccount(null);
-      setStatus('disconnected');
-      setError(null);
-      setNotice(null);
     }
-  }, []);
+  }, [runSync]);
 
   const syncNow = useCallback(() => runSync('merge'), [runSync]);
   const restoreFromCloud = useCallback(() => runSync('restore'), [runSync]);
@@ -455,11 +381,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     account,
     lastSyncedAt,
     error,
-    notice,
     configured,
-    hasSession: Boolean(account),
-    signIn,
-    signUp,
     disconnect,
     syncNow,
     restoreFromCloud,

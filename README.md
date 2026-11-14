@@ -7,7 +7,7 @@ It ships two ways from the same codebase:
 - **Web / PWA** — installable from Chrome, offline capable.
 - **Android APK** — a Capacitor shell with real scheduled notifications that fire with the app closed, plus optional cloud sync.
 
-All data lives in `localStorage` and the app works fully offline. Cloud sync is optional: sign in with email and password and each record syncs through a Supabase database, so the phone and the website stay in step.
+Sign in with email and password to use the app (when cloud sync is configured). Every record syncs through a Supabase database, so the phone and the website stay in step, and each device keeps a full copy in `localStorage` that works offline.
 
 ## Features
 
@@ -203,7 +203,7 @@ See [`.env.example`](.env.example).
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `VITE_SUPABASE_URL` | No | Supabase project URL. Needed only for cloud sync |
+| `VITE_SUPABASE_URL` | No | Supabase URL. Here the site's own proxy, `https://dayflow-one-blue.vercel.app/supabase`. Setting it makes sign-in required |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | No | Supabase publishable (or legacy anon) key. Public by design; row-level security protects the data |
 | `VITE_ENABLE_BANK_SMS` | No | `"true"` shows the bank-spend inbox. Leave off on `main`: it needs the native listener from `feature/bank-sms-notifications` |
 
@@ -213,19 +213,38 @@ Everything else works without environment variables. Never put the Supabase
 ### Cloud sync setup (Supabase)
 
 1. Supabase dashboard -> your project -> **Connect** -> **Framework** -> React.
-   Copy the project URL and publishable key into `.env` (and into the host's
-   build variables, e.g. Vercel).
+   Put the publishable key in `.env` as `VITE_SUPABASE_PUBLISHABLE_KEY`.
 2. **SQL Editor** -> run
    [`supabase/migrations/20261114120000_dayflow_records.sql`](supabase/migrations/20261114120000_dayflow_records.sql)
    once. It creates `public.dayflow_records`, the last-write-wins trigger, the
    grants for signed-in users and the row-level security policies. Running it
    again is safe.
-3. **Authentication -> URL Configuration**: set the Site URL to the deployed
-   site (`https://daily-tasks-management.vercel.app`) and add it and
-   `http://localhost:3000` to the redirect URLs. The email confirmation link
-   returns there.
-4. Rebuild. In the app: Settings -> Cloud Sync -> Create account, confirm the
-   email, then Sign in. The first sign-in uploads what is on the device.
+3. **Authentication -> Sign In / Providers -> Email**: turn **Confirm email**
+   off. Confirmation links point at `supabase.co`, which some networks block
+   (see below), so new accounts sign straight in instead.
+4. **Authentication -> URL Configuration**: Site URL
+   `https://dayflow-one-blue.vercel.app`; redirect URLs: that and
+   `http://localhost:3000`.
+5. Deploy. Opening the app shows the login screen; Create account signs in and
+   uploads whatever was already on the device.
+
+**Proxy.** [`vercel.json`](vercel.json) rewrites `/supabase/*` on the site to
+the Supabase project, and `VITE_SUPABASE_URL` points there, because some Indian
+networks block `*.supabase.co` by DNS (a MeitY order) and the app cannot be used
+without signing in. The proxy reaches only this one project and adds
+`Cache-Control: no-store`. Keep any future catch-all rewrite after it.
+
+**Login required.** `components/auth/AuthGate` shows the login screen until a
+session exists. A saved session counts as signed in even when the token cannot
+be refreshed offline, so the app opens without a network once someone has
+signed in. Signing out keeps the data on the device; signing in with a
+different account asks before replacing it (or uploads it, if that account has
+no data yet).
+
+**Password reset.** "Forgot password?" emails a link. Two limits: the link
+points at `supabase.co` (blocked on the same networks; open it with encrypted
+DNS or another network), and Supabase's built-in email sender only delivers to
+your project's team members. Set up custom SMTP in the dashboard for real users.
 
 How it works: every record is one row, keyed by its id, with the record's own
 `updatedAt`. A deleted record is a row with `deleted = true`. The newer
@@ -237,27 +256,23 @@ and works offline.
 
 ### Cloud sync troubleshooting
 
-Settings -> Cloud Sync -> **Test connection** checks setup, account and
+Settings -> Account & Sync -> **Test connection** checks setup, account and
 database access, and names the step that fails.
 
 | Symptom | Cause |
 | --- | --- |
 | "The dayflow_records table is missing" | The migration has not been run in the SQL editor |
 | "Signed-in users can't use dayflow_records" | The grants are missing; run the migration again |
-| "Confirm your email first" | The confirmation link has not been opened yet |
-| "Can't reach Supabase" | No connection, or the network blocks `supabase.co` (see below) |
+| "Confirm your email first" | Confirm email is still on in the dashboard (step 3) |
+| "Can't reach the Dayflow server" | No connection, or the `/supabase` proxy is not deployed: `https://dayflow-one-blue.vercel.app/supabase/auth/v1/health` must answer with JSON |
 | "This device is linked to another account" | Sign out, then sign in with the other account; the app asks before replacing this device's data |
-
-Some Indian networks block `*.supabase.co` by DNS (a MeitY order); the browser
-shows a page that says the website has been blocked. A device using encrypted
-DNS (Chrome Secure DNS, Android Private DNS) is not affected.
 
 ## Project Structure
 
 ```
 src/
   App.tsx                  # Root component: all state, load/save to localStorage, handlers
-  main.tsx                 # Entry: one-time profile migration, then mount
+  main.tsx                 # Entry: one-time profile migration, then AuthGate -> App
   index.css                # Tailwind and global styles
   types.ts                 # All TypeScript domain types
   components/
@@ -273,12 +288,14 @@ src/
     AlarmRingOverlay.tsx   # In-app ringing alarm
     AppLockScreen.tsx      # Biometric lock (Android)
     BankSmsInbox.tsx       # Bank spend inbox (off on main, see below)
-    CloudSyncSection.tsx   # Cloud sync sign-in / sync / restore / test
+    auth/                  # AuthGate, login / create account / reset screens
+    CloudSyncSection.tsx   # Account & Sync: sync now / restore / test / sign out
     ReminderReliabilityCard.tsx # Android permission + exact-alarm nudge
     MonthlyReportCard.tsx  # Month summary with CSV / PDF export
     ui/                    # Button, Card, Dropdown, CategorySelect, Toast
   hooks/
-    useCloudSync.ts        # Sign-in state, auto sync triggers, merge/restore
+    useAuthGate.ts         # Which screen shows before the app (login required)
+    useCloudSync.ts        # Auto sync triggers, merge/restore, sign out
   services/
     cloudSyncService.ts    # Supabase client, sign-in, record pull/push
     notificationService.ts # Browser/PWA notifications (web fallback)
@@ -313,6 +330,7 @@ android/                   # Capacitor Android project (committed)
     Dayflow*Widget*.java   # Tasks and spend home-screen widgets
 supabase/
   migrations/              # SQL for the sync table, trigger and RLS
+vercel.json                # /supabase proxy to the Supabase project
 scripts/
   generate-notification-sounds.mjs # Builds res/raw/*.wav chimes
   generate-pwa-icons.mjs   # Builds public/icons/*.png
@@ -322,7 +340,7 @@ scripts/
 ## Data and Privacy
 
 - All data is stored in `localStorage` on this device, under one set of keys. There is no local account.
-- Cloud sync is optional and off until you sign in. Desktop and phone stay in sync by signing in to the same account. Sync now merges; Restore replaces this device and drops edits that were never uploaded.
+- Signing in is required whenever cloud sync is configured. Desktop and phone stay in sync by signing in to the same account. Sync now merges; Restore replaces this device and drops edits that were never uploaded.
 - Synced data is stored in the app's Supabase database. Row-level security limits every row to the account that owns it; signed-out requests get no access at all.
 - Clearing app/browser storage erases the data on that device. Sign in again (or use Export JSON) to get it back.
 - Sync is last-write-wins per record, with deletes tracked as tombstones. An open browser tab pulls changes when it regains focus, comes back online, and once a minute while visible; the Android app pulls when it comes to the foreground.

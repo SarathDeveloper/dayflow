@@ -15,7 +15,7 @@ import {
   type CloudRowMeta,
 } from './cloudRecords';
 import { DATA_SCHEMA_VERSION, DEFAULT_SETTINGS, type SyncData, type SyncEnvelope } from './persistence';
-import { RECORD_COLLECTIONS } from './cloudRecords';
+import { RECORD_COLLECTIONS, initialSyncMode, isAccountSwitch } from './cloudRecords';
 import type { Task } from '../types';
 
 const T = (minute: number) => new Date(Date.UTC(2026, 10, 14, 10, minute)).toISOString();
@@ -272,5 +272,15 @@ describe('RECORD_COLLECTIONS', () => {
   it('lists exactly the collections a backup carries, so nothing is synced or backed up alone', async () => {
     const { BACKUP_ARRAY_KEYS } = await import('./backup');
     expect([...RECORD_COLLECTIONS].sort()).toEqual([...BACKUP_ARRAY_KEYS].sort());
+  });
+});
+
+describe('initialSyncMode', () => {
+  it('merges for the same account or a device never synced, switches for another account', () => {
+    expect(initialSyncMode(undefined, 'user-a')).toBe('merge');
+    expect(initialSyncMode('user-a', 'user-a')).toBe('merge');
+    expect(initialSyncMode('user-a', 'user-b')).toBe('switch-account');
+    expect(isAccountSwitch('user-a', 'user-b')).toBe(true);
+    expect(isAccountSwitch(undefined, 'user-b')).toBe(false);
   });
 });

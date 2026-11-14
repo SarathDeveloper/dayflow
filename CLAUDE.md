@@ -1,8 +1,9 @@
 # Dayflow
 
 React 19 + Vite + Tailwind 4 app shipped as a PWA and as a Capacitor 8 Android
-app. Local-first: all data lives in `localStorage`, with optional cloud sync
-through Supabase (one table, `public.dayflow_records`). See README.md for
+app. Local-first: all data lives in `localStorage` and syncs through Supabase
+(one table, `public.dayflow_records`). **Login is required** when Supabase is
+configured. Live site: https://dayflow-one-blue.vercel.app. See README.md for
 features, setup and the Android release process.
 
 ## Commands
@@ -20,9 +21,15 @@ features, setup and the Android release process.
   bumps `dataEpoch`.
 - `src/lib/`: pure, tested logic. Put new rules here, not in components.
 - `src/services/`: platform code (Supabase I/O, notifications, plugin wrappers).
+- Auth: `main.tsx` renders `components/auth/AuthGate` (driven by
+  `hooks/useAuthGate.ts`), which mounts App only once a session exists. App
+  can unmount on sign-out, so native listeners must detach even if they
+  finish attaching after unmount (the `disposed` pattern in App.tsx).
 - Cloud sync: `lib/cloudRecords.ts` (pure: envelope <-> rows, what to pull and
   push), `services/cloudSyncService.ts` (network), `hooks/useCloudSync.ts`
   (lifecycle). Schema in `supabase/migrations/`.
+- Supabase is reached through the site's `/supabase` proxy (`vercel.json`),
+  because some Indian networks block `*.supabase.co`.
 - `android/.../dailytasks/`: native alarms (`AlarmScheduler`, ring service and
   screen, boot receiver) and home-screen widgets.
 
@@ -55,6 +62,10 @@ features, setup and the Android release process.
   server row key are the id alone.
 - **Supabase keys:** only the URL and publishable key belong in the app (they
   are in the committed `.env`). Never the service_role / secret key.
+- **Signed in = a saved session exists** (`storedAccount()`), not "the startup
+  auth event had a session": offline refresh failures report no session but
+  keep it saved. Keep `guardedFetch`: without it a non-JSON error page (Vercel
+  404, captive portal) would make supabase-js delete the session.
 - **Schema changes** go in a new file in `supabase/migrations/`; keep RLS on
   and grant `authenticated` explicitly (new tables are not exposed by default).
 - **Bank SMS is off on `main`** (`VITE_ENABLE_BANK_SMS`). Its native listener

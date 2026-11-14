@@ -33,11 +33,45 @@ export class CloudAuthError extends Error {
 
 const url = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
+const AUTH_STORAGE_KEY = 'dayflow-supabase-auth';
 
 let client: SupabaseClient | null = null;
 
+const PROXY_FAILURE = 'Failed to fetch: the Supabase proxy returned a page that is not from Supabase';
+
+/**
+ * Supabase always answers errors with JSON. A non-JSON error (a Vercel 404, a
+ * captive portal, a network block page) is not an answer from Supabase, but
+ * supabase-js would treat it as one: an "unknown" auth error is not retried
+ * and deletes the saved session, signing the person out. Turn such pages into
+ * a network failure instead, which supabase-js retries and keeps the session.
+ */
+export async function guardedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (!response.ok) {
+    const type = response.headers.get('content-type') ?? '';
+    if (!type.toLowerCase().includes('json')) throw new TypeError(PROXY_FAILURE);
+  }
+  return response;
+}
+
 export function isCloudConfigured(): boolean {
   return Boolean(url && key);
+}
+
+/**
+ * Where email links (password reset, confirmation) should land. The website
+ * uses its own origin. The Android app has none, so it uses the site that
+ * hosts the /supabase proxy, when the URL is such a proxy.
+ */
+export function siteUrl(): string | undefined {
+  if (!isNative() && typeof window !== 'undefined') return window.location.origin;
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.endsWith('.supabase.co') ? undefined : parsed.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getSupabase(): SupabaseClient | null {
@@ -50,8 +84,9 @@ export function getSupabase(): SupabaseClient | null {
         // The website signs in from the email confirmation link. The Android
         // app has no web address for that link to return to.
         detectSessionInUrl: !isNative(),
-        storageKey: 'dayflow-supabase-auth',
+        storageKey: AUTH_STORAGE_KEY,
       },
+      global: { fetch: guardedFetch },
     });
   }
   return client;
@@ -71,9 +106,26 @@ export function accountOf(session: Session | null): CloudAccount | null {
 /** True when a saved session exists, without waiting for the client to load it. */
 export function hasStoredSession(): boolean {
   try {
-    return Boolean(localStorage.getItem('dayflow-supabase-auth'));
+    return Boolean(localStorage.getItem(AUTH_STORAGE_KEY));
   } catch {
     return false;
+  }
+}
+
+/**
+ * The account of the saved session, read straight from storage. Supabase keeps
+ * the session there until it is really ended (sign-out, revoked or deleted
+ * account); a refresh that fails for lack of network leaves it in place.
+ */
+export function storedAccount(): CloudAccount | null {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { user?: { id?: string; email?: string } };
+    const id = parsed.user?.id;
+    return id ? { id, email: parsed.user?.email ?? '' } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -98,6 +150,8 @@ export function describeAuthError(error: unknown): string {
       return 'An account with this email already exists. Sign in instead.';
     case 'weak_password':
       return e.message || 'Choose a longer password.';
+    case 'same_password':
+      return 'Choose a password different from the current one.';
     case 'email_address_invalid':
       return 'That email address is not valid.';
     case 'over_email_send_rate_limit':
@@ -111,12 +165,12 @@ export function describeAuthError(error: unknown): string {
     default:
       break;
   }
-  if (isNetworkError(e)) return 'Can’t reach Supabase. Check your connection.';
+  if (isNetworkError(e)) return 'Can’t reach the Dayflow server. Signing in needs an internet connection.';
   return e.message || 'Sign-in failed.';
 }
 
 function isNetworkError(e: ErrorLike): boolean {
-  return /failed to fetch|network|load failed|fetch failed/i.test(e.message ?? '');
+  return /failed to fetch|network|load failed|fetch failed|supabase proxy/i.test(e.message ?? '');
 }
 
 /** Turn a PostgREST error into something a person can act on. */
@@ -125,6 +179,10 @@ function toCloudError(error: ErrorLike): Error {
   const message = error.message ?? '';
   if (code === 'PGRST301' || code === 'PGRST303' || error.status === 401 || /jwt/i.test(message)) {
     return new CloudAuthError();
+  }
+  // Rows reference auth.users: the account was deleted while still signed in.
+  if (code === '23503') {
+    return new CloudAuthError('This account no longer exists. Sign in again or create a new account.');
   }
   if (code === 'PGRST205' || code === '42P01') {
     return new Error(`The ${RECORDS_TABLE} table is missing. Run ${MIGRATION_FILE} in the Supabase SQL editor.`);
@@ -158,10 +216,11 @@ export async function signIn(email: string, password: string): Promise<Session> 
 
 /** Returns null when the project requires the email to be confirmed first. */
 export async function signUp(email: string, password: string): Promise<Session | null> {
+  const redirect = siteUrl();
   const { data, error } = await requireClient().auth.signUp({
     email: email.trim(),
     password,
-    options: isNative() ? undefined : { emailRedirectTo: window.location.origin },
+    options: redirect ? { emailRedirectTo: redirect } : undefined,
   });
   if (error) throw new Error(describeAuthError(error));
   // An existing, confirmed email comes back with no identities instead of an error.
@@ -169,6 +228,22 @@ export async function signUp(email: string, password: string): Promise<Session |
     throw new Error(describeAuthError({ code: 'user_already_exists' }));
   }
   return data.session;
+}
+
+/** Emails a reset link. It opens the website, which then asks for a new password. */
+export async function resetPassword(email: string): Promise<void> {
+  const redirect = siteUrl();
+  const { error } = await requireClient().auth.resetPasswordForEmail(
+    email.trim(),
+    redirect ? { redirectTo: redirect } : undefined,
+  );
+  if (error) throw new Error(describeAuthError(error));
+}
+
+/** Sets a new password for the signed-in (or recovering) user. */
+export async function updatePassword(password: string): Promise<void> {
+  const { error } = await requireClient().auth.updateUser({ password });
+  if (error) throw new Error(describeAuthError(error));
 }
 
 export async function signOut(): Promise<void> {

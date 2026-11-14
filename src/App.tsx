@@ -151,7 +151,12 @@ function usePersistJson(key: string, value: unknown, enabled: boolean) {
   }, [key, value, enabled]);
 }
 
-export default function App() {
+interface AppProps {
+  /** The person signed in with their password moments ago: skip the app-lock prompt once. */
+  skipInitialLock?: boolean;
+}
+
+export default function App({ skipInitialLock = false }: AppProps) {
   const todayStr = todayString();
 
   // Theme State (Light / Dark Mode)
@@ -430,7 +435,7 @@ export default function App() {
     }
     return DEFAULT_SETTINGS;
   });
-  const [appLocked, setAppLocked] = useState(() => isNativeAndroid() && isAppLockEnabled());
+  const [appLocked, setAppLocked] = useState(() => isNativeAndroid() && isAppLockEnabled() && !skipInitialLock);
   const [lockError, setLockError] = useState('');
   const [nativeBootReady, setNativeBootReady] = useState(() => !isNativeAndroid());
 
@@ -795,6 +800,8 @@ export default function App() {
             setActiveAlert({ task, triggeredAt: new Date() });
           },
         });
+        // Unmounted (sign-out) while the listeners were being attached.
+        if (cancelled) removeListeners();
       } catch (e) {
         console.warn('Native reminder setup failed:', e);
       } finally {
@@ -816,7 +823,7 @@ export default function App() {
   useEffect(() => {
     if (!nativeBootReady || promptedAfterBoot.current) return;
     promptedAfterBoot.current = true;
-    if (isNativeAndroid() && isAppLockEnabled()) void unlockApp();
+    if (isNativeAndroid() && isAppLockEnabled() && !skipInitialLock) void unlockApp();
   }, [nativeBootReady, unlockApp]);
 
   useEffect(() => {
@@ -954,6 +961,7 @@ export default function App() {
   useEffect(() => {
     if (!isNativeAndroid()) return;
     let remove: (() => void) | undefined;
+    let disposed = false;
     void CapApp.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) {
         if (shouldIgnoreAppPause() || isChoosingBackupFolder()) return;
@@ -991,6 +999,11 @@ export default function App() {
         }
       })();
     }).then((handle) => {
+      // App unmounts on sign-out, possibly before the listener is attached.
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
       remove = () => {
         try {
           handle.remove();
@@ -999,12 +1012,16 @@ export default function App() {
         }
       };
     });
-    return () => remove?.();
+    return () => {
+      disposed = true;
+      remove?.();
+    };
   }, []);
 
   useEffect(() => {
     if (!isNativeAndroid()) return;
     let remove = () => {};
+    let disposed = false;
     const applyQueued = async () => {
       try {
         const { events } = await DayflowAlarm.consumeEvents();
@@ -1021,6 +1038,11 @@ export default function App() {
     void DayflowAlarm.addListener('alarmEvent', () => {
       void applyQueued();
     }).then((handle) => {
+      // App unmounts on sign-out, possibly before the listener is attached.
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
       remove = () => {
         try {
           handle.remove();
@@ -1029,7 +1051,10 @@ export default function App() {
         }
       };
     });
-    return () => remove();
+    return () => {
+      disposed = true;
+      remove();
+    };
   }, []);
 
   // Web / PWA fallback: the original in-page poller, still useful in a tab.
@@ -1345,8 +1370,14 @@ export default function App() {
   useEffect(() => {
     if (!isNative()) return;
     let remove: (() => void) | undefined;
+    let disposed = false;
 
     void CapApp.addListener('backButton', () => backHandlerRef.current()).then((handle) => {
+      // App unmounts on sign-out, possibly before the listener is attached.
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
       remove = () => {
         try {
           handle.remove();
@@ -1356,7 +1387,10 @@ export default function App() {
       };
     });
 
-    return () => remove?.();
+    return () => {
+      disposed = true;
+      remove?.();
+    };
   }, []);
 
   // Complete Task & Generate Next Recurring Task

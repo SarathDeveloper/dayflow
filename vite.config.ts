@@ -53,6 +53,9 @@ export default defineConfig(({mode}) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           navigateFallback: 'index.html',
+          // /supabase/* is the Vercel proxy to the Supabase project (see
+          // vercel.json). The service worker must never answer it with the app.
+          navigateFallbackDenylist: [/^\/supabase\//],
         },
         devOptions: {
           enabled: false,

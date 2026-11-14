@@ -276,6 +276,20 @@ export function sameSnapshot(current: SyncEnvelope, next: SyncEnvelope): boolean
 }
 
 /**
+ * First sync after the app opens for `userId`. A device last synced with a
+ * different account is only opened by that account after the person confirmed
+ * replacing this device's data at sign-in, so the cloud copy replaces it.
+ */
+export function initialSyncMode(lastUserId: string | undefined, userId: string): 'merge' | 'switch-account' {
+  return lastUserId && lastUserId !== userId ? 'switch-account' : 'merge';
+}
+
+/** True when signing in as `userId` would replace another account's data on this device. */
+export function isAccountSwitch(lastUserId: string | undefined, userId: string): boolean {
+  return initialSyncMode(lastUserId, userId) === 'switch-account';
+}
+
+/**
  * One merge sync, minus the network: fold what was pulled into the local
  * envelope and work out what to upload. `rows` are the full rows downloaded
  * for `idsToDownload(meta, ...)`; tombstones come straight from `meta`.
