@@ -1,12 +1,18 @@
-import React, { useRef, useState } from 'react';
-import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle, Music, Lock, Folder } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle, Lock, Folder } from 'lucide-react';
 import { NotificationSettings, SoundType } from '../types';
 import { audioService } from '../services/audioService';
-import { clearLocalMusicFile, previewLocalMusic, saveLocalMusicFile } from '../lib/localMusic';
-import { isAppLockEnabled, setAppLockEnabled } from '../lib/appLock';
+import { setAppLockEnabled } from '../lib/appLock';
 import { isNativeAndroid } from '../lib/platform';
-import { canUseAppLock, promptAppUnlock } from '../services/appLock';
-import { DayflowAlarm } from '../services/dayflowAlarm';
+import {
+  forgetAppLockCredential,
+  isAppLockActive,
+  isAppLockSupported,
+  promptAppUnlock,
+  setUpAppLock,
+} from '../services/appLock';
+import { storedAccount } from '../services/cloudSyncService';
+import { AlarmSongsSection } from './AlarmSongsSection';
 import { CloudSyncSection } from './CloudSyncSection';
 import { ProgressSettingsSection } from './ProgressSettingsSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
@@ -57,46 +63,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   nextReminder,
   onRequestExactAlarm,
 }) => {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [songError, setSongError] = useState('');
-  const [appLockOn, setAppLockOn] = useState(() => isNativeAndroid() && isAppLockEnabled());
+  const [appLockOn, setAppLockOn] = useState(() => isAppLockActive());
   const [appLockError, setAppLockError] = useState('');
   const [appLockBusy, setAppLockBusy] = useState(false);
+  // Android always has the lock; a browser needs a built-in fingerprint/face/PIN authenticator.
+  const [appLockSupported, setAppLockSupported] = useState(() => isNativeAndroid());
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setAppLockOn(isAppLockActive());
+    let cancelled = false;
+    void isAppLockSupported().then((supported) => {
+      if (!cancelled) setAppLockSupported(supported);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleTestSound = (sound: SoundType) => {
     audioService.playSound(sound, 'Daily task reminder test');
-  };
-
-  const chooseSong = async () => {
-    setSongError('');
-    try {
-      if (isNativeAndroid()) {
-        const picked = await DayflowAlarm.pickMusic();
-        onUpdateSettings({ ...settings, localMusicName: picked.name });
-        return;
-      }
-      fileRef.current?.click();
-    } catch (e) {
-      const message = e instanceof Error ? e.message : '';
-      if (message.includes('too-large')) setSongError('Choose a song under 15 MB.');
-      else if (!message.toLowerCase().includes('cancel')) setSongError('Could not use that song.');
-    }
-  };
-
-  const onSongFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    setSongError('');
-    try {
-      const name = await saveLocalMusicFile(file);
-      onUpdateSettings({ ...settings, localMusicName: name });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : '';
-      setSongError(message === 'too-large' ? 'Choose a song under 15 MB.' : 'Could not use that song.');
-    }
   };
 
   const toggleAppLock = async () => {
@@ -105,32 +93,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setAppLockBusy(true);
     try {
       const enabling = !appLockOn;
-      if (enabling) {
-        const check = await canUseAppLock();
-        if (!check.available) {
-          setAppLockError(check.message);
+      // Turning it on checks (Android) or registers (website) the fingerprint. Turning it
+      // off asks again on Android; on the website the open app is already unlocked, and a
+      // broken fingerprint must not trap the lock on.
+      if (enabling || isNativeAndroid()) {
+        const result = enabling ? await setUpAppLock(storedAccount()?.email ?? '') : await promptAppUnlock();
+        if (!result.ok) {
+          if (!result.canceled) setAppLockError(result.message);
           return;
         }
       }
-      const result = await promptAppUnlock();
-      if (!result.ok) {
-        if (!result.canceled) setAppLockError(result.message);
-        return;
-      }
+      if (!enabling) forgetAppLockCredential();
       setAppLockEnabled(enabling);
       setAppLockOn(enabling);
     } finally {
       setAppLockBusy(false);
-    }
-  };
-
-  const removeSong = async () => {
-    setSongError('');
-    try {
-      await clearLocalMusicFile();
-      onUpdateSettings({ ...settings, localMusicName: undefined });
-    } catch {
-      setSongError('Could not remove the song.');
     }
   };
 
@@ -193,7 +170,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {isNativeAndroid() && (
+          {(appLockSupported || appLockOn) && (
             <div className="space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-1.5">
@@ -210,8 +187,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Ask for face unlock, fingerprint, or your PIN when Dayflow opens and each time you come back to it.
+                {isNativeAndroid()
+                  ? 'Ask for your fingerprint, face unlock or PIN when Dayflow opens and each time you come back to it.'
+                  : 'Ask for this device’s fingerprint, face unlock or PIN when Dayflow opens and when you come back after a minute away. Forgot it? Your account password unlocks too. On the website this keeps others from opening Dayflow; it does not encrypt what is saved in this browser.'}
               </p>
+              {appLockOn && !appLockSupported && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                  This device no longer offers a fingerprint, face unlock or PIN to the browser. Turn the lock off, or set one up again.
+                </p>
+              )}
               {appLockError && <p className="text-[11px] text-rose-600">{appLockError}</p>}
             </div>
           )}
@@ -272,45 +256,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
-            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
-              <div className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
-                <Music className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Local music</span>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                One song for any reminder or alarm set to Local music. The file stays on this device and is not backed up.
-              </p>
-              <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200 truncate">
-                {settings.localMusicName || 'No song chosen'}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void chooseSong()}
-                  className="px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 font-semibold"
-                >
-                  Choose song
-                </button>
-                <button
-                  type="button"
-                  disabled={!settings.localMusicName}
-                  onClick={() => void previewLocalMusic()}
-                  className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-semibold disabled:opacity-50"
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  disabled={!settings.localMusicName}
-                  onClick={() => void removeSong()}
-                  className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-rose-600 border border-slate-200 dark:border-slate-700 font-semibold disabled:opacity-50"
-                >
-                  Remove
-                </button>
-              </div>
-              {songError && <p className="text-[11px] text-rose-600">{songError}</p>}
-              <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={(event) => void onSongFile(event)} />
-            </div>
+            <AlarmSongsSection />
           </div>
 
           {/* Reminder delivery (native Android only) */}

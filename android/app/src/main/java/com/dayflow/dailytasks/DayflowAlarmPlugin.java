@@ -59,50 +59,80 @@ public class DayflowAlarmPlugin extends Plugin {
         plugin.notifyListeners("alarmEvent", event);
     }
 
+    /** Opens the audio picker; several files may be chosen. Cancelling resolves with nothing added. */
     @PluginMethod
-    public void pickMusic(PluginCall call) {
+    public void addSongs(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("audio/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivityForResult(call, intent, "musicResult");
+        startActivityForResult(call, intent, "songsResult");
     }
 
     @ActivityCallback
-    private void musicResult(PluginCall call, ActivityResult result) {
+    private void songsResult(PluginCall call, ActivityResult result) {
         if (call == null) return;
-        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
-            call.reject("cancelled");
-            return;
+        java.util.List<Uri> uris = new java.util.ArrayList<>();
+        Intent data = result.getData();
+        if (result.getResultCode() == Activity.RESULT_OK && data != null) {
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+                for (int i = 0; i < clip.getItemCount(); i++) {
+                    Uri uri = clip.getItemAt(i).getUri();
+                    if (uri != null) uris.add(uri);
+                }
+            } else if (data.getData() != null) {
+                uris.add(data.getData());
+            }
         }
-        Uri uri = result.getData().getData();
-        if (uri == null) {
-            call.reject("cancelled");
-            return;
-        }
-        try {
-            String name = AlarmScheduler.copyMusic(getContext(), uri);
-            JSObject payload = new JSObject();
-            payload.put("name", name);
+        Context context = getContext().getApplicationContext();
+        // Copying up to 15 MB per song: keep it off the main thread.
+        new Thread(() -> {
+            JSArray added = new JSArray();
+            JSArray skipped = new JSArray();
+            for (Uri uri : uris) {
+                try {
+                    added.put(AlarmScheduler.addSong(context, uri).optString("id"));
+                } catch (AlarmScheduler.SongException error) {
+                    skipped.put(skip(error.name, error.getMessage()));
+                } catch (Exception error) {
+                    skipped.put(skip(AlarmScheduler.displayName(context, uri), "failed"));
+                }
+            }
+            JSObject payload = songsPayload(context);
+            payload.put("added", added);
+            payload.put("skipped", skipped);
             call.resolve(payload);
-        } catch (IOException error) {
-            call.reject("too-large".equals(error.getMessage()) ? "too-large" : "Could not copy the song");
-        }
+        }).start();
     }
 
-    @PluginMethod
-    public void clearMusic(PluginCall call) {
-        AlarmScheduler.clearMusic(getContext());
-        call.resolve();
+    private static JSObject skip(String name, String reason) {
+        JSObject item = new JSObject();
+        item.put("name", name == null ? "Song" : name);
+        item.put("reason", reason == null ? "failed" : reason);
+        return item;
     }
 
-    @PluginMethod
-    public void hasMusic(PluginCall call) {
+    private static JSObject songsPayload(Context context) {
         JSObject payload = new JSObject();
-        boolean has = AlarmScheduler.hasMusic(getContext());
-        payload.put("has", has);
-        payload.put("name", has ? AlarmScheduler.musicName(getContext()) : "");
-        call.resolve(payload);
+        try {
+            payload.put("songs", new JSArray(AlarmScheduler.listSongs(context).toString()));
+        } catch (Exception error) {
+            payload.put("songs", new JSArray());
+        }
+        return payload;
+    }
+
+    @PluginMethod
+    public void listSongs(PluginCall call) {
+        call.resolve(songsPayload(getContext()));
+    }
+
+    @PluginMethod
+    public void removeSong(PluginCall call) {
+        AlarmScheduler.removeSong(getContext(), call.getString("id", ""));
+        call.resolve(songsPayload(getContext()));
     }
 
     @PluginMethod

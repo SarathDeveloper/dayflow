@@ -21,6 +21,7 @@ import {
   weekStartMonday,
 } from './habits';
 import { resolveReminderDelivery } from './sounds';
+import { pickSong } from './songs';
 
 /** Do not schedule further out than this; keeps the alarm list small. */
 export const MAX_SCHEDULE_HORIZON_DAYS = 60;
@@ -50,6 +51,8 @@ export interface ReminderPlan {
   body: string;
   /** The task's own chime choice; drives the Android notification channel. */
   sound: SoundType;
+  /** With `sound: 'music'`: the song on this device that plays. */
+  songId?: string;
   /** Loop on the alarm bridge instead of a one-shot notification. */
   ring: boolean;
   /** Task id, or `habit:{id}:{date}` for a habit day. */
@@ -111,8 +114,10 @@ export function buildReminderPlans(
   habits: Habit[] = [],
   checkIns: HabitCheckIn[] = [],
   goals: Goal[] = [],
-  hasMusic = Boolean(settings.localMusicName)
+  /** Alarm songs on this device, oldest first. */
+  songIds: readonly string[] = []
 ): ReminderPlan[] {
+  const hasMusic = songIds.length > 0;
   const nowMs = now.getTime();
   const horizonMs = nowMs + MAX_SCHEDULE_HORIZON_DAYS * 24 * 60 * 60 * 1000;
   const usedIds = new Set<number>();
@@ -158,12 +163,13 @@ export function buildReminderPlans(
       title: task.title,
       body: task.time ? `${task.time} · ${task.category}` : task.category,
       sound: delivery.sound,
+      songId: delivery.sound === 'music' ? pickSong(task.reminder.songId, songIds) ?? undefined : undefined,
       ring: delivery.ring,
       occurrenceId: task.id,
     });
   }
 
-  appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs, hasMusic);
+  appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs, songIds);
 
   // Sunday-evening nudge to read the weekly report. Part of this plan list,
   // because the native sync cancels any pending notification not in it.
@@ -195,8 +201,9 @@ function appendHabitPlans(
   settings: NotificationSettings,
   nowMs: number,
   horizonMs: number,
-  hasMusic: boolean
+  songIds: readonly string[]
 ): void {
+  const hasMusic = songIds.length > 0;
   const today = todayDateString(new Date(nowMs));
   for (const habit of habits) {
     if (!habit.reminder?.enabled || !habit.reminder.time) continue;
@@ -252,6 +259,7 @@ function appendHabitPlans(
                 title: habit.title,
                 body: `Habit · ${habit.reminder.time}`,
                 sound: delivery.sound,
+                songId: delivery.sound === 'music' ? pickSong(habit.reminder.songId, songIds) ?? undefined : undefined,
                 ring: delivery.ring,
                 occurrenceId: `habit:${habit.id}:${day}`,
               });

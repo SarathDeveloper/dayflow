@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Bell, Minus, Plus, Repeat, X } from 'lucide-react';
 import type { Goal, Habit, HabitColor, HabitScheduleType, SoundType } from '../types';
 import { audioService } from '../services/audioService';
-import { previewLocalMusic } from '../lib/localMusic';
 import { HABIT_COLOR_IDS, habitColor } from '../lib/habitStyle';
 import { SoundFields } from './SoundFields';
 import { HABIT_ICON_IDS, HabitIcon } from './HabitIcon';
@@ -15,7 +14,6 @@ interface HabitModalProps {
   initialHabit?: Habit | null;
   goals: Goal[];
   defaultGoalId?: string;
-  localMusicName?: string;
 }
 
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -34,7 +32,6 @@ export const HabitModal: React.FC<HabitModalProps> = ({
   initialHabit,
   goals,
   defaultGoalId,
-  localMusicName,
 }) => {
   const [title, setTitle] = useState('');
   const [scheduleType, setScheduleType] = useState<HabitScheduleType>('daily');
@@ -50,6 +47,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
   const [reminderTime, setReminderTime] = useState('08:00');
   const [sound, setSound] = useState<SoundType>('chime');
   const [ringAlarm, setRingAlarm] = useState(false);
+  const [songId, setSongId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -68,6 +66,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       setReminderTime(initialHabit.reminder?.time || '08:00');
       setSound(initialHabit.reminder?.sound || 'chime');
       setRingAlarm(Boolean(initialHabit.reminder?.alarm));
+      setSongId(initialHabit.reminder?.songId);
     } else {
       setTitle('');
       setScheduleType('daily');
@@ -83,6 +82,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       setReminderTime('08:00');
       setSound('chime');
       setRingAlarm(false);
+      setSongId(undefined);
     }
   }, [defaultGoalId, initialHabit, isOpen]);
 
@@ -119,6 +119,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
             enabled: true,
             time: reminderTime || '08:00',
             sound,
+            songId: sound === 'music' ? songId : undefined,
             alarm: ringAlarm || undefined,
             lastNotifiedAt: initialHabit?.reminder?.lastNotifiedAt,
             snoozedUntil: initialHabit?.reminder?.snoozedUntil,
@@ -341,16 +342,9 @@ export const HabitModal: React.FC<HabitModalProps> = ({
                     onSound={setSound}
                     ring={ringAlarm}
                     onRing={setRingAlarm}
-                    localMusicName={localMusicName}
-                    onPreview={() => {
-                      if (sound === 'music') {
-                        void previewLocalMusic().then((played) => {
-                          if (!played) audioService.playSound('chime', title || 'Habit reminder');
-                        });
-                        return;
-                      }
-                      audioService.playSound(sound, title || 'Habit reminder');
-                    }}
+                    songId={songId}
+                    onSongId={setSongId}
+                    onPreview={() => audioService.playSound(sound, title || 'Habit reminder')}
                   />
                 </div>
               </div>

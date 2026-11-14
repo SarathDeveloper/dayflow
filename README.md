@@ -16,6 +16,7 @@ Sign in with email and password to use the app (when cloud sync is configured). 
 - Priorities (low / medium / high / urgent), subtasks, tags, and estimated minutes
 - Recurrence: none, daily, weekdays, weekly, monthly, or custom interval
 - Per-task reminders with sound selection and snooze
+- Alarm songs: add songs from the phone or computer (Settings → Alarm songs, up to 30, 15 MB each) and pick a different one for each task, habit or alarm. Songs stay on the device; a song chosen on another device plays this device's first song
 - Quick-add from the floating action button
 
 **Focus Room**
@@ -50,6 +51,7 @@ Sign in with email and password to use the app (when cloud sync is configured). 
 - Light / dark theme
 - Browser notifications with quiet hours
 - Sound effects and speech options
+- App lock with fingerprint, face unlock or PIN (Settings → App lock): native on Android, WebAuthn on the website (relocks after a minute away; the account password also unlocks). On the website it is a screen lock, not encryption
 - One device profile for tasks, money, and diary. Optional cloud sync (Supabase, email + password) keeps the website and the phone on the same data
 - Undo toast for deletes, JSON export / import, reset to sample data
 
@@ -286,7 +288,8 @@ src/
     ledger/                # Accounts, transfers, history, account detail
     *Modal.tsx             # Task, habit, goal, diary, finance, debt, bill, savings, settings
     AlarmRingOverlay.tsx   # In-app ringing alarm
-    AppLockScreen.tsx      # Biometric lock (Android)
+    AppLockScreen.tsx      # Fingerprint lock screen (Android + website)
+    AlarmSongsSection.tsx  # Settings: the device's alarm songs
     BankSmsInbox.tsx       # Bank spend inbox (off on main, see below)
     auth/                  # AuthGate, login / create account / reset screens
     CloudSyncSection.tsx   # Account & Sync: sync now / restore / test / sign out
@@ -300,9 +303,9 @@ src/
     cloudSyncService.ts    # Supabase client, sign-in, record pull/push
     notificationService.ts # Browser/PWA notifications (web fallback)
     nativeNotificationService.ts # Android reminder notifications and channels
-    dayflowAlarm.ts        # Native alarm, music, backup-share plugin wrapper
+    dayflowAlarm.ts        # Native alarm, song library, backup-share plugin wrapper
     homeWidgets.ts         # Android home-screen widget updates
-    appLock.ts             # Biometric unlock
+    appLock.ts             # Fingerprint unlock (Android plugin or website WebAuthn)
     bankSms.ts             # Bank SMS plugin wrapper (native side not on main)
     audioService.ts        # Sound and speech playback
   lib/                     # Pure logic, unit-tested (*.test.ts next to each file)
@@ -313,10 +316,10 @@ src/
     financeRecurrence.ts, billMaterializer.ts, budgetAlerts.ts
     financeInsights.ts, monthlyReport.ts, simplePdf.ts, merchantCategory.ts
     bankSmsParse.ts, bankSmsInbox.ts
-    reminders.ts, alarms.ts, sounds.ts, localMusic.ts
+    reminders.ts, alarms.ts, sounds.ts, songs.ts, songLibrary.ts
     habits.ts, habitStyle.ts, taskRecurrence.ts, quickAdd.ts
     dailyPlan.ts, timeBlocks.ts, widgetSnapshot.ts
-    diary.ts, diaryImages.ts, appLock.ts, appLockSession.ts
+    diary.ts, diaryImages.ts, appLock.ts, appLockSession.ts, webLock.ts
     platform.ts, features.ts, dateFormat.ts, oauthRedirect.ts, cn.ts
   data/
     initialCategories.ts   # Default categories

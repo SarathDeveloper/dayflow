@@ -139,9 +139,10 @@ describe('reminder ring routing', () => {
       createdAt: '2026-10-01T00:00:00.000Z',
       updatedAt: '2026-10-01T00:00:00.000Z',
     };
-    const plans = buildReminderPlans([], { ...settings, quietHours: { ...settings.quietHours, enabled: false }, localMusicName: 'Song.mp3' }, now, [habit]);
+    const plans = buildReminderPlans([], { ...settings, quietHours: { ...settings.quietHours, enabled: false } }, now, [habit], [], [], ['song-a']);
     expect(plans[0].ring).toBe(true);
     expect(plans[0].sound).toBe('music');
+    expect(plans[0].songId).toBe('song-a');
     expect(plans[0].fireAt.getHours()).toBe(9);
     expect(plans[0].fireAt.getMinutes()).toBe(10);
     expect(plans[0].occurrenceId).toBe('habit:habit-1:2026-10-28');

@@ -37,7 +37,6 @@ interface HabitsViewProps {
   onDeleteHabit: (id: string) => void;
   onOpenGoals: () => void;
   onRegisterClose: (close: (() => void) | null) => void;
-  localMusicName?: string;
 }
 
 type HabitPane = 'today' | 'week' | 'progress';
@@ -64,7 +63,6 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
   onDeleteHabit,
   onOpenGoals,
   onRegisterClose,
-  localMusicName,
 }) => {
   const today = todayDateString();
   const [pane, setPane] = useState<HabitPane>('today');
@@ -497,7 +495,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
         </section>
       )}
 
-      <HabitModal isOpen={modalOpen} onClose={closeModal} onSave={onSaveHabit} initialHabit={editing} goals={goals} localMusicName={localMusicName} />
+      <HabitModal isOpen={modalOpen} onClose={closeModal} onSave={onSaveHabit} initialHabit={editing} goals={goals} />
     </div>
   );
 };

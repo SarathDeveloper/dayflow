@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { Task, Priority, RecurrenceType, SoundType, Category, Subtask } from '../types';
 import { audioService } from '../services/audioService';
-import { previewLocalMusic } from '../lib/localMusic';
 import { SoundFields } from './SoundFields';
 
 interface TaskModalProps {
@@ -23,7 +22,6 @@ interface TaskModalProps {
   initialTask?: Task | null;
   categories: Category[];
   selectedDate: string;
-  localMusicName?: string;
   /** Start time for a new task, e.g. the Timeline hour that was tapped. */
   initialTime?: string;
 }
@@ -35,7 +33,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   initialTask,
   categories,
   selectedDate,
-  localMusicName,
   initialTime,
 }) => {
   const [title, setTitle] = useState('');
@@ -51,6 +48,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   const [remindBeforeMinutes, setRemindBeforeMinutes] = useState(5);
   const [sound, setSound] = useState<SoundType>('chime');
   const [ringAlarm, setRingAlarm] = useState(false);
+  const [songId, setSongId] = useState<string | undefined>(undefined);
   const [subtasks, setSubtasks] = useState<{ id: string; title: string; completed: boolean }[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -71,6 +69,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setRemindBeforeMinutes(initialTask.reminder?.remindBeforeMinutes ?? 5);
       setSound(initialTask.reminder?.sound || 'chime');
       setRingAlarm(Boolean(initialTask.reminder?.alarm));
+      setSongId(initialTask.reminder?.songId);
       setSubtasks(initialTask.subtasks || []);
       setTags(initialTask.tags || []);
     } else {
@@ -87,6 +86,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setRemindBeforeMinutes(5);
       setSound('chime');
       setRingAlarm(false);
+      setSongId(undefined);
       setSubtasks([]);
       setTags([]);
     }
@@ -120,12 +120,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   };
 
   const handlePreviewSound = () => {
-    if (sound === 'music') {
-      void previewLocalMusic().then((played) => {
-        if (!played) audioService.playSound('chime', title || 'Sample Task');
-      });
-      return;
-    }
     audioService.playSound(sound, title || 'Sample Task');
   };
 
@@ -157,6 +151,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
         enabled: reminderEnabled,
         remindBeforeMinutes,
         sound,
+        songId: sound === 'music' ? songId : undefined,
         alarm: ringAlarm || undefined,
         lastNotifiedAt: initialTask?.reminder?.lastNotifiedAt,
         snoozedUntil: initialTask?.reminder?.snoozedUntil,
@@ -412,7 +407,8 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   onSound={setSound}
                   ring={ringAlarm}
                   onRing={setRingAlarm}
-                  localMusicName={localMusicName}
+                  songId={songId}
+                  onSongId={setSongId}
                   onPreview={handlePreviewSound}
                 />
               </div>

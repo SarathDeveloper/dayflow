@@ -54,8 +54,12 @@ features, setup and the Android release process.
     Java on `feature/bank-sms-notifications` (reference values pinned in
     `bankSmsParse.test.ts`).
 - **Device-only data, never synced or backed up:** daily plan
-  (`dayflow_daily_plan_v1`), app-lock flag (`dayflow_app_lock`), bank SMS queue
-  (`dayflow_bank_sms_*`). A new collection that should sync must be added to
+  (`dayflow_daily_plan_v1`), app-lock flag (`dayflow_app_lock`) and the website
+  lock's WebAuthn credential id (`dayflow_web_lock_credential_v1`), alarm song
+  files (Android `filesDir/songs/`, website IndexedDB `dayflow-media`), bank SMS
+  queue (`dayflow_bank_sms_*`). A reminder's `songId` does sync, so it may name
+  a song this device lacks: `pickSong` then falls back to the oldest song, then
+  the chime. A new collection that should sync must be added to
   `SyncData` in `lib/persistence.ts`, `RECORD_COLLECTIONS` in
   `lib/cloudRecords.ts` and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
 - **Record ids must be unique across all collections.** Tombstones and the

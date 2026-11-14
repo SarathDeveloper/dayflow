@@ -2,6 +2,7 @@ import type { Alarm, Habit, SoundType, Task } from '../types';
 import type { AlarmEvent } from '../services/dayflowAlarm';
 import { localDateString } from './habits';
 import { hashNotificationId, type ReminderPlan } from './reminders';
+import { nativeRingSound, pickSong } from './songs';
 
 export const RING_WINDOW_MS = 120_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -12,6 +13,8 @@ export interface RingSession {
   title: string;
   body: string;
   sound: SoundType;
+  /** With `sound: 'music'`: the song to loop on the website ring screen. */
+  songId?: string | null;
   snoozeMinutes: number;
 }
 
@@ -21,6 +24,7 @@ export interface RingPlan {
   at: number;
   title: string;
   body: string;
+  /** Built-in sound name, or `music:<song id>`. */
   sound: string;
   kind: 'task' | 'habit' | 'alarm';
   snoozeMinutes: number;
@@ -95,7 +99,13 @@ export function afterAlarmSnooze(alarm: Alarm, minutes: number, now = new Date()
   return { ...alarm, enabled: true, snoozedUntil: until, acknowledgedAt: undefined, updatedAt: until };
 }
 
-export function upcomingRings(plans: ReminderPlan[], alarms: Alarm[], now: Date): RingPlan[] {
+export function upcomingRings(
+  plans: ReminderPlan[],
+  alarms: Alarm[],
+  now: Date,
+  /** Alarm songs on this device, oldest first. */
+  songIds: readonly string[] = []
+): RingPlan[] {
   const used = new Set<number>();
   const rings: RingPlan[] = [];
   for (const plan of plans) {
@@ -107,7 +117,7 @@ export function upcomingRings(plans: ReminderPlan[], alarms: Alarm[], now: Date)
       at: plan.fireAt.getTime(),
       title: plan.title,
       body: plan.body,
-      sound: plan.sound === 'voice' ? 'chime' : plan.sound,
+      sound: nativeRingSound(plan.sound, plan.songId),
       kind: plan.habitId ? 'habit' : 'task',
       snoozeMinutes: 10,
     });
@@ -130,7 +140,7 @@ export function upcomingRings(plans: ReminderPlan[], alarms: Alarm[], now: Date)
       at: fire.getTime(),
       title: alarm.label || 'Alarm',
       body: alarm.time,
-      sound: alarm.sound === 'voice' ? 'chime' : alarm.sound,
+      sound: nativeRingSound(alarm.sound, alarm.sound === 'music' ? pickSong(alarm.songId, songIds) : null),
       kind: 'alarm',
       snoozeMinutes: alarm.snoozeMinutes > 0 ? alarm.snoozeMinutes : 10,
       time: alarm.time,

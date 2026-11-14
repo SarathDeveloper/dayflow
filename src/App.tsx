@@ -94,7 +94,16 @@ import {
 } from './services/nativeNotificationService';
 import { isNative, isNativeAndroid } from './lib/platform';
 import { isAppLockEnabled } from './lib/appLock';
-import { isUnlockPromptOpen, promptAppUnlock, shouldIgnoreAppPause, shouldIgnoreAppResume } from './services/appLock';
+import {
+  canUsePasswordUnlock,
+  isAppLockActive,
+  isUnlockPromptOpen,
+  promptAppUnlock,
+  shouldIgnoreAppPause,
+  shouldIgnoreAppResume,
+} from './services/appLock';
+import { WEB_RELOCK_AFTER_MS } from './lib/webLock';
+import { checkAccountPassword } from './services/cloudSyncService';
 import {
   BackupError,
   buildBackup,
@@ -134,7 +143,8 @@ import {
   upcomingRings,
   type RingSession,
 } from './lib/alarms';
-import { hasLocalMusic } from './lib/localMusic';
+import { useSongs } from './lib/songLibrary';
+import { pickSong } from './lib/songs';
 import { buildFocusSession } from './lib/focusSessions';
 import { dailyProgress, weeklyConsistency } from './lib/progressScore';
 import { TodayProgressCard } from './components/TodayProgressCard';
@@ -421,7 +431,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
     return [];
   });
   const [ringing, setRinging] = useState<RingSession | null>(null);
-  const [musicReady, setMusicReady] = useState(false);
+  // Alarm songs live on this device only; reminders pick from these ids.
+  const { songs } = useSongs();
+  const songIds = useMemo(() => songs.map((song) => song.id), [songs]);
 
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntry[]>(() => {
     try {
@@ -452,7 +464,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     return DEFAULT_SETTINGS;
   });
-  const [appLocked, setAppLocked] = useState(() => isNativeAndroid() && isAppLockEnabled() && !skipInitialLock);
+  const [appLocked, setAppLocked] = useState(() => isAppLockActive() && !skipInitialLock);
   const [lockError, setLockError] = useState('');
   const [nativeBootReady, setNativeBootReady] = useState(() => !isNativeAndroid());
 
@@ -768,16 +780,16 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const alarmsRef = useRef<Alarm[]>(alarms);
   alarmsRef.current = alarms;
   const writeLeaveBackupRef = useRef<() => void>(() => {});
-  const musicReadyRef = useRef(musicReady);
-  musicReadyRef.current = musicReady;
+  const songIdsRef = useRef(songIds);
+  songIdsRef.current = songIds;
   const ringingRef = useRef<RingSession | null>(ringing);
   ringingRef.current = ringing;
   const nativeBootReadyRef = useRef(nativeBootReady);
   nativeBootReadyRef.current = nativeBootReady;
 
   const unlockApp = useCallback(async () => {
-    if (!isNativeAndroid() || isUnlockPromptOpen()) return;
-    if (!isAppLockEnabled()) {
+    if (isUnlockPromptOpen()) return;
+    if (!isAppLockActive()) {
       setAppLocked(false);
       setLockError('');
       return;
@@ -865,18 +877,53 @@ export default function App({ skipInitialLock = false }: AppProps) {
   useEffect(() => {
     if (!nativeBootReady || promptedAfterBoot.current) return;
     promptedAfterBoot.current = true;
-    if (isNativeAndroid() && isAppLockEnabled() && !skipInitialLock) void unlockApp();
+    if (isAppLockActive() && !skipInitialLock) void unlockApp();
   }, [nativeBootReady, unlockApp]);
 
+  // Website: lock again after a minute away (another tab, screen off). The
+  // timer covers the screen while away, so nothing shows before the prompt.
   useEffect(() => {
-    let cancelled = false;
-    void hasLocalMusic().then((ready) => {
-      if (!cancelled) setMusicReady(ready);
-    });
-    return () => {
-      cancelled = true;
+    if (isNativeAndroid()) return;
+    let hiddenAt: number | null = null;
+    let timer: number | undefined;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        if (shouldIgnoreAppPause()) return;
+        hiddenAt = Date.now();
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          if (isAppLockActive()) setAppLocked(true);
+        }, WEB_RELOCK_AFTER_MS);
+        return;
+      }
+      window.clearTimeout(timer);
+      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+      hiddenAt = null;
+      if (shouldIgnoreAppResume() || !isAppLockActive()) return;
+      if (away >= WEB_RELOCK_AFTER_MS) {
+        setAppLocked(true);
+        setLockError('');
+        void unlockAppRef.current();
+      }
     };
-  }, [settings.localMusicName]);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const unlockWithPassword = useCallback(async (password: string): Promise<string> => {
+    const result = await checkAccountPassword(password);
+    if (result === 'ok') {
+      setAppLocked(false);
+      setLockError('');
+      return '';
+    }
+    if (result === 'wrong') return 'That password is not right.';
+    if (result === 'rate-limited') return 'Too many tries. Wait a minute, then try again.';
+    return 'Could not check the password. Check your connection and try again.';
+  }, []);
 
   // Home-screen widgets show task titles and spending, so they stay blank while
   // app lock is on. A short delay batches bursts of edits into one update.
@@ -895,7 +942,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
   const pushNativeSchedule = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
-    const ready = musicReadyRef.current;
+    const ready = songIdsRef.current;
     if (granted) {
       void syncScheduledNotifications(
         tasksRef.current,
@@ -916,7 +963,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       goalsRef.current,
       ready
     );
-    void DayflowAlarm.sync({ plans: upcomingRings(plans, alarmsRef.current, new Date()) }).catch((e) => {
+    void DayflowAlarm.sync({ plans: upcomingRings(plans, alarmsRef.current, new Date(), ready) }).catch((e) => {
       console.warn('Failed to sync ringing alarms:', e);
     });
   }, []);
@@ -928,7 +975,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       pushNativeSchedule(Boolean(nativeSetup?.granted));
     }, 600);
     return () => clearTimeout(timer);
-  }, [tasks, settings, habits, habitCheckIns, goals, alarms, musicReady, nativeSetup?.granted, pushNativeSchedule]);
+  }, [tasks, settings, habits, habitCheckIns, goals, alarms, songIds, nativeSetup?.granted, pushNativeSchedule]);
 
   writeLeaveBackupRef.current = () => {
     const file = buildBackup({
@@ -1135,7 +1182,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
               const delivery = resolveReminderDelivery(
                 t.reminder.sound,
                 t.reminder.alarm,
-                musicReadyRef.current,
+                songIdsRef.current.length > 0,
                 settings.defaultSound
               );
               if (delivery.ring) {
@@ -1146,6 +1193,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
                     title: t.title,
                     body: t.time || '',
                     sound: delivery.sound,
+                    songId: pickSong(t.reminder.songId, songIdsRef.current),
                     snoozeMinutes: 10,
                   });
                 }
@@ -1199,7 +1247,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
           const delivery = resolveReminderDelivery(
             habit.reminder.sound,
             habit.reminder.alarm,
-            musicReadyRef.current,
+            songIdsRef.current.length > 0,
             settings.defaultSound
           );
           if (delivery.ring) {
@@ -1210,6 +1258,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 title: habit.title,
                 body: habit.reminder.time,
                 sound: delivery.sound,
+                songId: pickSong(habit.reminder.songId, songIdsRef.current),
                 snoozeMinutes: 10,
               });
             }
@@ -1237,13 +1286,14 @@ export default function App({ skipInitialLock = false }: AppProps) {
         const due = alarmDueAt(alarm, now);
         if (!due) continue;
         if (ringingRef.current?.id === alarm.id) break;
-        const delivery = resolveReminderDelivery(alarm.sound, true, musicReadyRef.current, settings.defaultSound);
+        const delivery = resolveReminderDelivery(alarm.sound, true, songIdsRef.current.length > 0, settings.defaultSound);
         setRinging({
           id: alarm.id,
           kind: 'alarm',
           title: alarm.label || 'Alarm',
           body: alarm.time,
           sound: delivery.sound,
+          songId: pickSong(alarm.songId, songIdsRef.current),
           snoozeMinutes: alarm.snoozeMinutes || 10,
         });
         break;
@@ -1323,6 +1373,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       enabled: partial.enabled ?? true,
       daysOfWeek: partial.daysOfWeek ?? [],
       sound: partial.sound || 'chime',
+      songId: partial.sound === 'music' ? partial.songId : undefined,
       snoozeMinutes: partial.snoozeMinutes || 10,
       createdAt: now,
       updatedAt: now,
@@ -1932,6 +1983,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
           enabled: true as const,
           time: partial.reminder.time || '08:00',
           sound: partial.reminder.sound,
+          songId: partial.reminder.sound === 'music' ? partial.reminder.songId : undefined,
           alarm: partial.reminder.alarm || undefined,
           lastNotifiedAt: partial.reminder.lastNotifiedAt,
           snoozedUntil: partial.reminder.snoozedUntil,
@@ -3063,6 +3115,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
           title={ringing.title}
           body={ringing.body}
           sound={ringing.sound}
+          songId={ringing.songId}
           snoozeMinutes={ringing.snoozeMinutes}
           onDismiss={() => finishRing('dismiss')}
           onSnooze={() => finishRing('snooze')}
@@ -3431,7 +3484,6 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onSaveHabit={handleSaveHabit}
             onLinkHabit={handleLinkHabit}
             onRegisterClose={registerGoalClose}
-            localMusicName={settings.localMusicName}
           />
         )}
 
@@ -3445,14 +3497,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onDeleteHabit={handleDeleteHabit}
             onOpenGoals={() => setActiveTab('goals')}
             onRegisterClose={registerHabitClose}
-            localMusicName={settings.localMusicName}
           />
         )}
 
         {activeTab === 'alarms' && (
           <AlarmsView
             alarms={alarms}
-            localMusicName={settings.localMusicName}
             onSave={handleSaveAlarm}
             onDelete={handleDeleteAlarm}
             onToggle={(id, enabled) =>
@@ -3608,7 +3658,6 @@ export default function App({ skipInitialLock = false }: AppProps) {
         initialTime={newTaskTime}
         categories={categories}
         selectedDate={selectedDate}
-        localMusicName={settings.localMusicName}
       />
 
       {/* Add / Edit Finance Transaction Modal */}
@@ -3717,7 +3766,6 @@ export default function App({ skipInitialLock = false }: AppProps) {
         }}
         initialHabit={editingHabit}
         goals={goals}
-        localMusicName={settings.localMusicName}
       />
 
       {/* Settings Modal */}
@@ -3785,7 +3833,14 @@ export default function App({ skipInitialLock = false }: AppProps) {
         />
       )}
     </div>
-    {appLocked && <AppLockScreen theme={theme} error={lockError} onUnlock={() => void unlockApp()} />}
+    {appLocked && (
+      <AppLockScreen
+        theme={theme}
+        error={lockError}
+        onUnlock={() => void unlockApp()}
+        onUsePassword={canUsePasswordUnlock() ? unlockWithPassword : undefined}
+      />
+    )}
     </>
   );
 }

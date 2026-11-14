@@ -2,13 +2,15 @@ import React, { useEffect } from 'react';
 import { AlarmClock } from 'lucide-react';
 import type { SoundType } from '../types';
 import { audioService } from '../services/audioService';
-import { loopLocalMusic } from '../lib/localMusic';
+import { loopSong } from '../lib/songLibrary';
 import { Button } from './ui/Button';
 
 interface AlarmRingOverlayProps {
   title: string;
   body: string;
   sound: SoundType;
+  /** With Local music: the song to loop. */
+  songId?: string | null;
   snoozeMinutes: number;
   onDismiss: () => void;
   onSnooze: () => void;
@@ -18,6 +20,7 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
   title,
   body,
   sound,
+  songId,
   snoozeMinutes,
   onDismiss,
   onSnooze,
@@ -25,8 +28,9 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
   useEffect(() => {
     let cancelled = false;
     if (sound === 'music') {
-      void loopLocalMusic().then((started) => {
-        if (!started && !cancelled) audioService.startLoop('chime', title);
+      // A cancelled ring never starts its song and never stops a newer ring's audio.
+      void loopSong(songId, () => cancelled).then((started) => {
+        if (!cancelled && !started) audioService.startLoop('chime', title);
       });
     } else {
       audioService.startLoop(sound, title);
@@ -35,7 +39,7 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
       cancelled = true;
       audioService.stopLoop();
     };
-  }, [sound, title]);
+  }, [sound, songId, title]);
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-950/90 text-white flex flex-col items-center justify-center p-6">

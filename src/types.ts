@@ -23,6 +23,8 @@ export interface TaskReminder {
   enabled: boolean;
   remindBeforeMinutes: number; // 0 = at time, 5, 15, 30, 60
   sound: SoundType;
+  /** With Local music: the alarm song on this device. Missing or unknown plays the oldest song. */
+  songId?: string;
   /** Loop until Dismiss or Snooze. Local music always rings this way. */
   alarm?: boolean;
   lastNotifiedAt?: string;
@@ -70,7 +72,7 @@ export interface NotificationSettings {
   soundEnabled: boolean;
   speechEnabled: boolean;
   defaultSound: SoundType;
-  /** Display name of the device-local song. The file itself is not synced. */
+  /** @deprecated Name of the single song from before the song library. Kept so old backups load. */
   localMusicName?: string;
   /** Daily focus goal for the progress score, in minutes. Missing means 50. */
   dailyFocusGoalMinutes?: number;
@@ -115,6 +117,8 @@ export interface HabitReminder {
   enabled: boolean;
   time: string; // HH:mm
   sound: SoundType;
+  /** With Local music: the alarm song on this device. Missing or unknown plays the oldest song. */
+  songId?: string;
   /** Loop until Dismiss or Snooze. Local music always rings this way. */
   alarm?: boolean;
   lastNotifiedAt?: string;
@@ -131,6 +135,8 @@ export interface Alarm {
   /** 0 = Sunday … 6 = Saturday. Empty means once. */
   daysOfWeek: number[];
   sound: SoundType;
+  /** With Local music: the alarm song on this device. Missing or unknown plays the oldest song. */
+  songId?: string;
   snoozeMinutes: number;
   snoozedUntil?: string;
   /** Set when this occurrence was dismissed so it does not ring again in the same window. */

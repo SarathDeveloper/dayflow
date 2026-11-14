@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { AlarmClock, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { Alarm, SoundType } from '../types';
 import { daySummary } from '../lib/alarms';
-import { previewLocalMusic } from '../lib/localMusic';
 import { audioService } from '../services/audioService';
 import { SoundFields } from './SoundFields';
 import { Button } from './ui/Button';
@@ -10,7 +9,6 @@ import { Card } from './ui/Card';
 
 interface AlarmsViewProps {
   alarms: Alarm[];
-  localMusicName?: string;
   onSave: (alarm: Partial<Alarm>) => void;
   onDelete: (id: string) => void;
   onToggle: (id: string, enabled: boolean) => void;
@@ -20,7 +18,6 @@ const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 export const AlarmsView: React.FC<AlarmsViewProps> = ({
   alarms,
-  localMusicName,
   onSave,
   onDelete,
   onToggle,
@@ -106,7 +103,6 @@ export const AlarmsView: React.FC<AlarmsViewProps> = ({
       {open && (
         <AlarmEditor
           initial={editing}
-          localMusicName={localMusicName}
           onClose={() => setOpen(false)}
           onSave={(draft) => {
             onSave(draft);
@@ -120,14 +116,14 @@ export const AlarmsView: React.FC<AlarmsViewProps> = ({
 
 const AlarmEditor: React.FC<{
   initial: Alarm | null;
-  localMusicName?: string;
   onClose: () => void;
   onSave: (alarm: Partial<Alarm>) => void;
-}> = ({ initial, localMusicName, onClose, onSave }) => {
+}> = ({ initial, onClose, onSave }) => {
   const [label, setLabel] = useState(initial?.label ?? '');
   const [time, setTime] = useState(initial?.time ?? '07:00');
   const [days, setDays] = useState<number[]>(initial?.daysOfWeek ?? []);
   const [sound, setSound] = useState<SoundType>(initial?.sound ?? 'chime');
+  const [songId, setSongId] = useState<string | undefined>(initial?.songId);
   const [ring, setRing] = useState(true);
   const [snoozeMinutes, setSnoozeMinutes] = useState(initial?.snoozeMinutes ?? 10);
 
@@ -136,6 +132,7 @@ const AlarmEditor: React.FC<{
     setTime(initial?.time ?? '07:00');
     setDays(initial?.daysOfWeek ?? []);
     setSound(initial?.sound ?? 'chime');
+    setSongId(initial?.songId);
     setSnoozeMinutes(initial?.snoozeMinutes ?? 10);
   }, [initial]);
 
@@ -144,12 +141,6 @@ const AlarmEditor: React.FC<{
   };
 
   const preview = () => {
-    if (sound === 'music') {
-      void previewLocalMusic().then((played) => {
-        if (!played) audioService.playSound('chime', label || 'Alarm');
-      });
-      return;
-    }
     audioService.playSound(sound, label || 'Alarm');
   };
 
@@ -166,6 +157,7 @@ const AlarmEditor: React.FC<{
             enabled: initial?.enabled ?? true,
             daysOfWeek: days,
             sound,
+            songId: sound === 'music' ? songId : undefined,
             snoozeMinutes,
             snoozedUntil: initial?.snoozedUntil,
           });
@@ -209,7 +201,8 @@ const AlarmEditor: React.FC<{
           onSound={setSound}
           ring={ring}
           onRing={setRing}
-          localMusicName={localMusicName}
+          songId={songId}
+          onSongId={setSongId}
           onPreview={preview}
           alwaysRing
         />

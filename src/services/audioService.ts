@@ -135,18 +135,47 @@ class AudioService {
     });
   }
 
-  /** Play a picked song. `loop` keeps it going until `stopLoop`. */
-  public playFile(blob: Blob, loop: boolean): void {
+  /**
+   * Play a picked song. `loop` keeps it going until `stopLoop`. Resolves false
+   * when the browser refuses (unsupported file, or playback blocked).
+   */
+  public async playFile(
+    blob: Blob,
+    loop: boolean,
+    options: {
+      /** Checked before starting and after play() settles; a cancelled call never keeps playing. */
+      isCancelled?: () => boolean;
+      /** Called when a non-looping file plays to the end. */
+      onEnded?: () => void;
+    } = {}
+  ): Promise<boolean> {
+    if (options.isCancelled?.()) return false;
     this.stopLoop();
+    let audio: HTMLAudioElement | null = null;
     try {
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      audio = new Audio(url);
       audio.loop = loop;
-      void audio.play().catch((e) => console.warn('Song playback failed:', e));
-      this.fileAudio = audio;
+      const own = audio;
+      if (options.onEnded) {
+        own.addEventListener('ended', () => {
+          if (this.fileAudio === own) options.onEnded?.();
+        });
+      }
+      this.fileAudio = own;
       this.fileUrl = url;
+      await own.play();
+      // A newer call replaced this one: leave its audio alone.
+      if (this.fileAudio !== own) return false;
+      if (options.isCancelled?.()) {
+        this.stopLoop();
+        return false;
+      }
+      return true;
     } catch (e) {
-      console.warn('Song playback failed:', e);
+      // Only report failures of the current file; a replaced one rejects with AbortError.
+      if (audio && this.fileAudio === audio) console.warn('Song playback failed:', e);
+      return false;
     }
   }
 

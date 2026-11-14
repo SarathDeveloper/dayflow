@@ -159,13 +159,13 @@ export async function syncScheduledNotifications(
   habits: Habit[] = [],
   checkIns: HabitCheckIn[] = [],
   goals: Goal[] = [],
-  hasMusic?: boolean
+  songIds: readonly string[] = []
 ): Promise<ReminderSyncResult> {
   if (!isNativeAndroid()) return { scheduled: 0, cancelled: 0, skipped: true };
   if (!options.granted) return { scheduled: 0, cancelled: 0, skipped: true };
 
   try {
-    const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals, hasMusic).filter(
+    const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals, songIds).filter(
       (plan) => !plan.ring
     );
     const desired = new Map(plans.map((plan) => [plan.notificationId, plan]));

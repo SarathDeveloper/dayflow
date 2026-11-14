@@ -22,10 +22,24 @@ export interface AlarmEvent {
   snoozeMinutes: number;
 }
 
+export interface NativeSong {
+  id: string;
+  name: string;
+  size: number;
+  addedAt: number;
+}
+
+export interface NativeSongSkip {
+  name: string;
+  reason: 'too-large' | 'empty' | 'limit' | 'failed';
+}
+
 interface DayflowAlarmPlugin {
-  pickMusic(): Promise<{ name: string }>;
-  clearMusic(): Promise<void>;
-  hasMusic(): Promise<{ has: boolean; name: string }>;
+  /** Opens the audio picker (several files allowed) and copies the picks into app storage. */
+  addSongs(): Promise<{ songs: NativeSong[]; added: string[]; skipped: NativeSongSkip[] }>;
+  listSongs(): Promise<{ songs: NativeSong[] }>;
+  removeSong(options: { id: string }): Promise<{ songs: NativeSong[] }>;
+  /** `sound` is a built-in name or `music:<song id>`. */
   preview(options: { sound: string }): Promise<void>;
   stopPreview(): Promise<void>;
   sync(options: { plans: NativeRingPlan[] }): Promise<void>;

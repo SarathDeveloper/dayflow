@@ -208,6 +208,38 @@ export async function currentSession(): Promise<Session | null> {
   return data.session;
 }
 
+/**
+ * Checks the signed-in account's password without touching the app's session:
+ * the app lock's fallback when the fingerprint cannot be used. The extra
+ * session the check creates is signed out again straight away.
+ */
+export async function checkAccountPassword(password: string): Promise<'ok' | 'wrong' | 'rate-limited' | 'offline'> {
+  const email = storedAccount()?.email;
+  if (!isCloudConfigured() || !email || !password) return 'wrong';
+  const base = url.replace(/\/+$/, '');
+  try {
+    const response = await fetch(`${base}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { apikey: key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (response.status === 429) return 'rate-limited';
+    const type = response.headers.get('content-type') ?? '';
+    if (!type.toLowerCase().includes('json')) return 'offline';
+    const body = (await response.json().catch(() => ({}))) as { access_token?: string };
+    if (response.ok && body.access_token) {
+      void fetch(`${base}/auth/v1/logout?scope=local`, {
+        method: 'POST',
+        headers: { apikey: key, Authorization: `Bearer ${body.access_token}` },
+      }).catch(() => undefined);
+      return 'ok';
+    }
+    return response.status === 400 || response.status === 401 ? 'wrong' : 'offline';
+  } catch {
+    return 'offline';
+  }
+}
+
 export async function signIn(email: string, password: string): Promise<Session> {
   const { data, error } = await requireClient().auth.signInWithPassword({ email: email.trim(), password });
   if (error || !data.session) throw new Error(describeAuthError(error));

@@ -22,17 +22,25 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Calendar;
+import java.util.UUID;
 
-/** Stores the device song and the pending ring list, and talks to AlarmManager. */
+/** Stores the device song library and the pending ring list, and talks to AlarmManager. */
 public final class AlarmScheduler {
     static final String PREFS = "dayflow_alarms";
     static final String KEY_PLANS = "plans";
     static final String KEY_EVENTS = "events";
+    /** Name of the single song saved before the library existed. Migrated, then removed. */
     static final String KEY_MUSIC_NAME = "music_name";
+    /** JSON array of {id, name, size, addedAt}, oldest first. */
+    static final String KEY_SONGS = "songs";
     /** Set on a plan while it is snoozed, so a timezone rebuild keeps the snooze time. */
     static final String KEY_SNOOZED = "snoozed";
+    /** The single song saved before the library existed. */
     static final String MUSIC_FILE = "reminder-music";
+    static final String SONG_DIR = "songs";
+    static final String LEGACY_SONG_ID = "legacy";
     static final int MAX_MUSIC_BYTES = 15 * 1024 * 1024;
+    static final int MAX_SONGS = 30;
 
     static final String EXTRA_ID = "id";
     static final String EXTRA_TITLE = "title";
@@ -52,8 +60,22 @@ public final class AlarmScheduler {
         return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    static File musicFile(Context context) {
+    static File legacyMusicFile(Context context) {
         return new File(context.getFilesDir(), MUSIC_FILE);
+    }
+
+    static boolean isValidSongId(String id) {
+        return id != null && id.matches("[A-Za-z0-9-]{1,64}");
+    }
+
+    static File songDir(Context context) {
+        File dir = new File(context.getFilesDir(), SONG_DIR);
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
+    }
+
+    static File songFile(Context context, String id) {
+        return new File(songDir(context), id);
     }
 
     static void replace(Context context, JSONArray plans) {
@@ -275,72 +297,240 @@ public final class AlarmScheduler {
         }
     }
 
-    static String copyMusic(Context context, Uri uri) throws IOException {
+    /** Thrown for a picked file that cannot join the library; the message is the reason. */
+    static final class SongException extends IOException {
+        final String name;
+
+        SongException(String reason, String name) {
+            super(reason);
+            this.name = name;
+        }
+    }
+
+    /** Display name of a picked file, or "Song". */
+    static String displayName(Context context, Uri uri) {
+        try (Cursor cursor = context.getContentResolver().query(
+            uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.isEmpty()) return name;
+            }
+        } catch (Exception ignored) {
+            // Some providers do not report a name.
+        }
+        return "Song";
+    }
+
+    private static JSONArray readSongEntries(Context context) {
+        try {
+            return new JSONArray(prefs(context).getString(KEY_SONGS, "[]"));
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
+    }
+
+    /** Moves the single pre-library song into the library once. */
+    private static void migrateLegacySong(Context context) {
+        File legacy = legacyMusicFile(context);
+        if (!legacy.exists()) return;
+        if (legacy.length() > 0) {
+            File dest = songFile(context, LEGACY_SONG_ID);
+            if (dest.exists()) dest.delete();
+            if (legacy.renameTo(dest)) {
+                try {
+                    JSONArray entries = readSongEntries(context);
+                    JSONObject entry = new JSONObject();
+                    entry.put("id", LEGACY_SONG_ID);
+                    entry.put("name", prefs(context).getString(KEY_MUSIC_NAME, "Song"));
+                    entry.put("size", dest.length());
+                    entry.put("addedAt", 0);
+                    JSONArray next = new JSONArray();
+                    next.put(entry);
+                    for (int i = 0; i < entries.length(); i++) {
+                        JSONObject other = entries.optJSONObject(i);
+                        if (other != null && !LEGACY_SONG_ID.equals(other.optString("id"))) next.put(other);
+                    }
+                    prefs(context).edit()
+                        .putString(KEY_SONGS, next.toString())
+                        .remove(KEY_MUSIC_NAME)
+                        .apply();
+                } catch (Exception ignored) {
+                    // The file is in place under songs/; it simply stays unlisted.
+                }
+                return;
+            }
+        }
+        legacy.delete();
+        prefs(context).edit().remove(KEY_MUSIC_NAME).apply();
+    }
+
+    /**
+     * Guards the song list and folder. Kept apart from AlarmScheduler.class, which
+     * dismiss, snooze and the event queue use, so ringing never waits on song I/O.
+     */
+    private static final Object SONGS_LOCK = new Object();
+    /** A temp copy older than this was left by a copy that died; delete it. */
+    private static final long STALE_TEMP_MS = 60 * 60 * 1000L;
+
+    /** Songs whose files exist, oldest first. Drops entries whose file is gone and stray files. */
+    static JSONArray listSongs(Context context) {
+        synchronized (SONGS_LOCK) {
+            migrateLegacySong(context);
+            JSONArray entries = readSongEntries(context);
+            JSONArray kept = new JSONArray();
+            java.util.Set<String> keptIds = new java.util.HashSet<>();
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry == null) continue;
+                String id = entry.optString("id");
+                if (!isValidSongId(id) || keptIds.contains(id)) continue;
+                File file = songFile(context, id);
+                if (file.exists() && file.length() > 0) {
+                    kept.put(entry);
+                    keptIds.add(id);
+                }
+            }
+            if (kept.length() != entries.length()) prefs(context).edit().putString(KEY_SONGS, kept.toString()).apply();
+            deleteStrayFiles(context, keptIds);
+            return kept;
+        }
+    }
+
+    /**
+     * Files no entry lists: a finished copy whose entry was never saved, or an old
+     * temp copy from a process that was killed mid-copy. A temp file that is still
+     * fresh may belong to a copy running right now, so it is left alone.
+     */
+    private static void deleteStrayFiles(Context context, java.util.Set<String> keptIds) {
+        File[] files = songDir(context).listFiles();
+        if (files == null) return;
+        long now = System.currentTimeMillis();
+        for (File file : files) {
+            String name = file.getName();
+            if (name.endsWith(".tmp")) {
+                if (now - file.lastModified() > STALE_TEMP_MS) file.delete();
+            } else if (!keptIds.contains(name)) {
+                file.delete();
+            }
+        }
+    }
+
+    /**
+     * Copies a picked file into the library and returns its entry. The copy (up to
+     * 15 MB, maybe a cloud download) runs without any lock; only the final rename
+     * and list update take SONGS_LOCK.
+     */
+    static JSONObject addSong(Context context, Uri uri) throws IOException {
         String name = "Song";
-        Cursor cursor = context.getContentResolver().query(
+        long reported = -1;
+        try (Cursor cursor = context.getContentResolver().query(
             uri,
             new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE},
             null,
             null,
             null
-        );
-        if (cursor != null) {
-            try {
-                if (cursor.moveToFirst()) {
-                    int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                    int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
-                    if (nameIndex >= 0 && cursor.getString(nameIndex) != null) name = cursor.getString(nameIndex);
-                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex) && cursor.getLong(sizeIndex) > MAX_MUSIC_BYTES) {
-                        throw new IOException("too-large");
-                    }
-                }
-            } finally {
-                cursor.close();
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (nameIndex >= 0 && cursor.getString(nameIndex) != null) name = cursor.getString(nameIndex);
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) reported = cursor.getLong(sizeIndex);
             }
+        } catch (Exception ignored) {
+            // Size is checked again while copying.
         }
+        if (reported > MAX_MUSIC_BYTES) throw new SongException("too-large", name);
+        if (listSongs(context).length() >= MAX_SONGS) throw new SongException("limit", name);
 
-        File temp = new File(context.getFilesDir(), MUSIC_FILE + ".tmp");
+        String id = UUID.randomUUID().toString();
+        File temp = new File(songDir(context), id + ".tmp");
         long total = 0;
         try (InputStream in = context.getContentResolver().openInputStream(uri);
              OutputStream out = new FileOutputStream(temp)) {
-            if (in == null) throw new IOException("empty");
+            if (in == null) throw new SongException("empty", name);
             byte[] buffer = new byte[8192];
             int read;
             while ((read = in.read(buffer)) >= 0) {
                 total += read;
-                if (total > MAX_MUSIC_BYTES) throw new IOException("too-large");
+                if (total > MAX_MUSIC_BYTES) throw new SongException("too-large", name);
                 if (read > 0) out.write(buffer, 0, read);
             }
-        } catch (IOException error) {
+        } catch (SongException error) {
             temp.delete();
             throw error;
+        } catch (Exception error) {
+            temp.delete();
+            throw new SongException("failed", name);
         }
         if (total <= 0) {
             temp.delete();
-            throw new IOException("empty");
+            throw new SongException("empty", name);
         }
-        File dest = musicFile(context);
-        if (dest.exists() && !dest.delete()) temp.delete();
-        if (!temp.renameTo(dest)) {
-            temp.delete();
-            throw new IOException("rename");
+
+        synchronized (SONGS_LOCK) {
+            JSONArray songs = listSongs(context);
+            if (songs.length() >= MAX_SONGS) {
+                temp.delete();
+                throw new SongException("limit", name);
+            }
+            File dest = songFile(context, id);
+            if (!temp.renameTo(dest)) {
+                temp.delete();
+                throw new SongException("failed", name);
+            }
+            try {
+                JSONObject entry = new JSONObject();
+                entry.put("id", id);
+                entry.put("name", name);
+                entry.put("size", total);
+                entry.put("addedAt", System.currentTimeMillis());
+                songs.put(entry);
+                // commit(): the file is in place, so the entry must be on disk before
+                // anything else lists the folder, or the file would look stray.
+                prefs(context).edit().putString(KEY_SONGS, songs.toString()).commit();
+                return entry;
+            } catch (Exception error) {
+                dest.delete();
+                throw new SongException("failed", name);
+            }
         }
-        prefs(context).edit().putString(KEY_MUSIC_NAME, name).apply();
-        return name;
     }
 
-    static void clearMusic(Context context) {
-        musicFile(context).delete();
-        prefs(context).edit().remove(KEY_MUSIC_NAME).apply();
+    static JSONArray removeSong(Context context, String id) {
         stopPreview();
+        synchronized (SONGS_LOCK) {
+            JSONArray songs = listSongs(context);
+            if (!isValidSongId(id)) return songs;
+            songFile(context, id).delete();
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < songs.length(); i++) {
+                JSONObject entry = songs.optJSONObject(i);
+                if (entry != null && !id.equals(entry.optString("id"))) kept.put(entry);
+            }
+            prefs(context).edit().putString(KEY_SONGS, kept.toString()).apply();
+            return kept;
+        }
     }
 
-    static boolean hasMusic(Context context) {
-        return musicFile(context).exists() && musicFile(context).length() > 0;
-    }
-
-    static String musicName(Context context) {
-        return prefs(context).getString(KEY_MUSIC_NAME, "");
+    /**
+     * The file for a ring sound: `music:<id>` plays that song; a plain "music",
+     * or a song that is no longer here, plays the oldest song. Null without songs.
+     */
+    static File resolveSongFile(Context context, String sound) {
+        if (sound == null || !sound.startsWith("music")) return null;
+        String id = sound.startsWith("music:") ? sound.substring("music:".length()) : "";
+        if (isValidSongId(id)) {
+            File chosen = songFile(context, id);
+            if (chosen.exists() && chosen.length() > 0) return chosen;
+        }
+        JSONArray songs = listSongs(context);
+        for (int i = 0; i < songs.length(); i++) {
+            JSONObject entry = songs.optJSONObject(i);
+            if (entry == null) continue;
+            File file = songFile(context, entry.optString("id"));
+            if (file.exists() && file.length() > 0) return file;
+        }
+        return null;
     }
 
     static void preview(Context context, String sound) {
@@ -363,17 +553,28 @@ public final class AlarmScheduler {
         previewPlayer = null;
     }
 
+    /** A prepared player for a ring sound. A song that cannot play falls back to the chime. */
     static MediaPlayer buildPlayer(Context context, String sound, boolean loop) {
+        File song = resolveSongFile(context, sound);
+        if (song != null) {
+            MediaPlayer player = preparePlayer(context, song, 0, loop);
+            if (player != null) return player;
+            return preparePlayer(context, null, R.raw.chime, loop);
+        }
+        MediaPlayer player = preparePlayer(context, null, rawFor(sound), loop);
+        return player != null ? player : preparePlayer(context, null, R.raw.chime, loop);
+    }
+
+    private static MediaPlayer preparePlayer(Context context, File file, int raw, boolean loop) {
+        MediaPlayer player = new MediaPlayer();
         try {
-            MediaPlayer player = new MediaPlayer();
             player.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build());
-            if ("music".equals(sound) && hasMusic(context)) {
-                player.setDataSource(musicFile(context).getAbsolutePath());
+            if (file != null) {
+                player.setDataSource(file.getAbsolutePath());
             } else {
-                int raw = rawFor(sound);
                 android.content.res.AssetFileDescriptor fd = context.getResources().openRawResourceFd(raw);
                 player.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
                 fd.close();
@@ -382,6 +583,7 @@ public final class AlarmScheduler {
             player.prepare();
             return player;
         } catch (Exception ignored) {
+            player.release();
             return null;
         }
     }
