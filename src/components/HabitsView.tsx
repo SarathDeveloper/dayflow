@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Flame, MoreHorizontal, Pencil, Plus, Repeat, Target, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Flame, HeartPulse, MoreHorizontal, Pencil, Plus, Repeat, Target, Trash2 } from 'lucide-react';
 import type { Goal, Habit, HabitCheckIn, HabitCheckInPatch } from '../types';
 import {
   addDays,
@@ -26,6 +26,7 @@ import { HabitCheckControl, HabitSkipButton } from './HabitCheckControl';
 import { HabitIcon } from './HabitIcon';
 import { HabitModal } from './HabitModal';
 import { showConfirm } from './ui/AppDialog';
+import { habitRecovery, overallConsistency, recoveryMessage } from '../lib/recovery';
 
 interface HabitsViewProps {
   goals: Goal[];
@@ -308,7 +309,8 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                     </button>
                     {days.map((day) => {
                       const future = day.date > today;
-                      const disabled = !day.scheduled || future || blocked;
+                      // Future days can only be planned as rest days.
+                      const disabled = !day.scheduled || blocked;
                       const className = !day.scheduled
                         ? 'bg-slate-100 dark:bg-slate-800'
                         : day.checked
@@ -325,16 +327,21 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                           key={day.date}
                           type="button"
                           disabled={disabled}
-                          title={day.date}
-                          aria-label={`${habit.title} ${day.date}`}
+                          title={future ? (day.skipped ? `${day.date}: planned rest day (tap to undo)` : `${day.date}: tap to plan a rest day`) : day.date}
+                          aria-label={future ? `${habit.title} ${day.date}, ${day.skipped ? 'planned rest day' : 'plan a rest day'}` : `${habit.title} ${day.date}`}
                           onClick={() => {
+                            if (future) {
+                              if (day.skipped) onSetCheckIn(habit.id, day.date, null);
+                              else onSetCheckIn(habit.id, day.date, { skipped: true });
+                              return;
+                            }
                             const target = Math.max(1, habit.targetCount ?? 1);
                             if (day.checked) onSetCheckIn(habit.id, day.date, null);
                             else onSetCheckIn(habit.id, day.date, { skipped: false, value: target });
                           }}
                           className={`w-8 h-8 mx-auto rounded-full text-[10px] font-bold text-white flex items-center justify-center disabled:cursor-default ${className}`}
                         >
-                          {day.checked || day.value <= 0 ? '' : day.value}
+                          {day.skipped ? 'R' : day.checked || day.value <= 0 ? '' : day.value}
                         </button>
                       );
                     })}
@@ -342,6 +349,9 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                 );
               })}
             </div>
+            <p className="mt-2 text-[10px] text-slate-400">
+              Tap a future day to plan a rest day (R). Rest days keep your streak and never count as missed.
+            </p>
           </Card>
         </section>
       )}
@@ -368,8 +378,28 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
               <ChevronRight className="w-5 h-5" />
             </button>
           </div>
+          {(() => {
+            const overall = overallConsistency(progressHabits, checkIns, goals, today);
+            return (
+              <Card className="p-4 space-y-1.5">
+                <p className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-200">
+                  <HeartPulse className="w-4 h-4 text-rose-500" />
+                  Last 7 days
+                </p>
+                <p className="text-2xl font-extrabold text-slate-900 dark:text-white">
+                  {overall.percent === null ? '—' : `${overall.percent}%`}
+                  <span className="ml-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">consistency</span>
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {overall.missedDays} missed {overall.missedDays === 1 ? 'day' : 'days'} · {overall.restDays} rest{' '}
+                  {overall.restDays === 1 ? 'day' : 'days'}. One missed day doesn’t erase your progress: keep going.
+                </p>
+              </Card>
+            );
+          })()}
           {progressHabits.map((habit) => {
             const through = monthThrough < monthStart ? monthStart : monthThrough;
+            const recovery = habitRecovery(habit, checkIns, today);
             const completion = habitCompletion(habit, checkIns, monthStart, through);
             const streak = habitStreak(habit, checkIns, today);
             const longest = longestStreak(habit, checkIns, today);
@@ -406,11 +436,25 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <Stat label="7 days" value={recovery.consistency7 === null ? '—' : `${recovery.consistency7}%`} />
                   <Stat label="This month" value={`${completion.percent}%`} />
                   <Stat label="Streak" value={streak > 0 ? `${streak}${unit}` : '—'} />
                   <Stat label="Longest" value={longest > 0 ? `${longest}${unit}` : '—'} />
                 </div>
+                {habit.schedule.type !== 'times_per_week' && (
+                  <p
+                    className={`text-[11px] font-medium ${
+                      recovery.status === 'fresh-start'
+                        ? 'text-amber-700 dark:text-amber-300'
+                        : recovery.status === 'recovered'
+                          ? 'text-emerald-700 dark:text-emerald-300'
+                          : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    {recoveryMessage(recovery, today)}
+                  </p>
+                )}
                 <div>
                   <div className="grid grid-cols-7 gap-1 mb-1">
                     {WEEKDAYS.map((label, index) => (
@@ -431,7 +475,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                     ))}
                   </div>
                   <p className="mt-2 text-[10px] text-slate-400">
-                    {completion.done} done · {completion.skipped} skipped · {completion.scheduled} expected
+                    {completion.done} done · {completion.skipped} rest {completion.skipped === 1 ? 'day' : 'days'} · {completion.scheduled} expected
                   </p>
                 </div>
                 {linked && linkedProgress && (

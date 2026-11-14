@@ -1,4 +1,4 @@
-import type { DiaryEntry, DiaryImage, DiaryMood, HabitColor } from '../types';
+import type { DiaryEntry, DiaryImage, DiaryMood, HabitColor, DiaryReflection } from '../types';
 import { habitColor, type HabitColorClasses } from './habitStyle';
 
 export const DIARY_MOODS: { id: DiaryMood; label: string }[] = [
@@ -118,4 +118,49 @@ export function diaryPreview(body: string, max = 80): string {
     .find((part) => part.length > 0) ?? '';
   if (line.length <= max) return line;
   return `${line.slice(0, max - 1).trimEnd()}…`;
+}
+
+// ---------------------------------------------------------------------------
+// Evening reflection
+// ---------------------------------------------------------------------------
+
+export const ENERGY_LEVELS: { value: number; label: string }[] = [
+  { value: 1, label: 'Drained' },
+  { value: 2, label: 'Low' },
+  { value: 3, label: 'Steady' },
+  { value: 4, label: 'Good' },
+  { value: 5, label: 'Full of energy' },
+];
+
+export function energyLabel(value: number | undefined): string | null {
+  return ENERGY_LEVELS.find((level) => level.value === value)?.label ?? null;
+}
+
+export const REFLECTION_PROMPTS: { key: keyof DiaryReflection; question: string; heading: string }[] = [
+  { key: 'wentWell', question: 'What went well today?', heading: 'Went well' },
+  { key: 'missed', question: 'What did I fail to complete?', heading: 'Didn’t finish' },
+  { key: 'learned', question: 'What did I learn?', heading: 'Learned' },
+  { key: 'improve', question: 'What should I improve tomorrow?', heading: 'Improve tomorrow' },
+];
+
+/** Trimmed answers; empty ones are dropped. */
+export function cleanReflection(reflection: DiaryReflection): DiaryReflection {
+  const clean: DiaryReflection = {};
+  for (const { key } of REFLECTION_PROMPTS) {
+    const value = reflection[key]?.trim();
+    if (value) clean[key] = value;
+  }
+  return clean;
+}
+
+/** The diary text for an evening review, so it reads well anywhere notes are shown. */
+export function composeReflectionBody(reflection: DiaryReflection): string {
+  const clean = cleanReflection(reflection);
+  const lines = REFLECTION_PROMPTS.filter(({ key }) => clean[key]).map(({ key, heading }) => `${heading}: ${clean[key]}`);
+  return lines.length > 0 ? lines.join('\n') : 'Evening review';
+}
+
+/** The evening-review entry of a day, if one was saved. */
+export function reflectionFor(entries: DiaryEntry[], date: string): DiaryEntry | undefined {
+  return entries.find((entry) => entry.date === date && entry.reflection);
 }

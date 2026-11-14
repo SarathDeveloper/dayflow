@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm, FocusSession } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -45,7 +45,7 @@ import {
   resolveSavingsDestinationId,
 } from './lib/savingsLedger';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
-import { currentTimeString, diaryCollectionFits, diaryPreview, isDiaryMood, sanitizeDiaryImages, validateDiaryDraft } from './lib/diary';
+import { cleanReflection, composeReflectionBody, currentTimeString, diaryCollectionFits, diaryPreview, isDiaryMood, reflectionFor, sanitizeDiaryImages, validateDiaryDraft } from './lib/diary';
 import { DEFAULT_PAYMENT_METHOD, financeCategoryError, isCustomFinanceCategory, normalizeCategoryName, reassignDeletedCategoryBudgets, sameCategoryName } from './data/financeCategories';
 import {
   buildAtmFee,
@@ -2023,6 +2023,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 mood: savedMood,
                 body: draft.body.trim(),
                 images: savedImages,
+                // An evening review sends these; an ordinary edit keeps what was there.
+                ...(partial.energy !== undefined ? { energy: partial.energy } : {}),
+                ...(partial.reflection !== undefined ? { reflection: partial.reflection } : {}),
                 updatedAt: now,
               }
             : entry
@@ -2035,6 +2038,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
             mood: savedMood,
             body: draft.body.trim(),
             images: savedImages,
+            ...(partial.energy !== undefined ? { energy: partial.energy } : {}),
+            ...(partial.reflection !== undefined ? { reflection: partial.reflection } : {}),
             createdAt: now,
             updatedAt: now,
           },
@@ -2050,6 +2055,27 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     setDiaryEntries(next);
     return true;
+  };
+
+  /** The evening review: one structured diary entry per day, updated if saved again. */
+  const handleSaveReflection = (input: {
+    date: string;
+    mood: DiaryMood;
+    energy?: number;
+    reflection: DiaryReflection;
+  }): boolean => {
+    const existing = reflectionFor(diaryEntries, input.date);
+    const reflection = cleanReflection(input.reflection);
+    return handleSaveDiaryEntry({
+      id: existing?.id,
+      date: input.date,
+      time: existing?.time ?? currentTimeString(),
+      mood: input.mood,
+      body: composeReflectionBody(reflection),
+      images: existing?.images,
+      energy: input.energy,
+      reflection,
+    });
   };
 
   const handleDeleteDiaryEntry = (id: string) => {
@@ -3229,6 +3255,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 onToggleComplete={handleToggleComplete}
                 onRescheduleTasks={handleRescheduleTasks}
                 onSaveDiaryEntry={handleSaveDiaryEntry}
+                onSaveReflection={handleSaveReflection}
+                existingReflection={reflectionFor(diaryEntries, localToday)}
                 settings={settings}
               />
             )}

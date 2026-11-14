@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import type { DiaryEntry, DiaryMood } from '../types';
 import { formatClockTime, formatLongDate } from '../lib/dateFormat';
-import { diaryMoodColor, diaryMoodLabel, groupDiaryByDate, sanitizeDiaryImages, searchDiaryEntries } from '../lib/diary';
+import { diaryMoodColor, diaryMoodLabel, energyLabel, groupDiaryByDate, sanitizeDiaryImages, searchDiaryEntries } from '../lib/diary';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 
@@ -189,6 +189,16 @@ const DiaryDayGroup: React.FC<{
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <DiaryMoodChip mood={entry.mood} />
+                {entry.reflection && (
+                  <span className="rounded-full bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                    Evening review
+                  </span>
+                )}
+                {energyLabel(entry.energy) && (
+                  <span className="rounded-full bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                    ⚡ {entry.energy}/5 · {energyLabel(entry.energy)}
+                  </span>
+                )}
                 <span className="text-xs font-semibold text-slate-400">{formatClockTime(entry.time)}</span>
               </div>
               {entry.body ? (

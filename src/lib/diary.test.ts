@@ -97,3 +97,27 @@ describe('diary collections', () => {
     expect(diaryPreview('abcdefghijklmnopqrstuvwxyz', 10)).toBe('abcdefghi…');
   });
 });
+
+describe('evening reflection', () => {
+  it('writes readable diary text from the answers, skipping empty ones', async () => {
+    const { composeReflectionBody, cleanReflection } = await import('./diary');
+    expect(composeReflectionBody({ wentWell: ' Gym done ', missed: '', learned: 'Async/await', improve: 'Sleep earlier' })).toBe(
+      'Went well: Gym done\nLearned: Async/await\nImprove tomorrow: Sleep earlier',
+    );
+    expect(composeReflectionBody({})).toBe('Evening review');
+    expect(cleanReflection({ wentWell: '  ', missed: 'Report' })).toEqual({ missed: 'Report' });
+  });
+
+  it('finds the one evening-review entry of a day', async () => {
+    const { reflectionFor, energyLabel } = await import('./diary');
+    const base = { time: '21:00', mood: 'good' as const, body: 'x', createdAt: '', updatedAt: '' };
+    const entries = [
+      { ...base, id: 'note', date: '2026-11-14' },
+      { ...base, id: 'review', date: '2026-11-14', reflection: { wentWell: 'yes' } },
+    ];
+    expect(reflectionFor(entries, '2026-11-14')?.id).toBe('review');
+    expect(reflectionFor(entries, '2026-11-13')).toBeUndefined();
+    expect(energyLabel(4)).toBe('Good');
+    expect(energyLabel(undefined)).toBeNull();
+  });
+});

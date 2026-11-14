@@ -92,6 +92,7 @@ export const HabitSkipButton: React.FC<{
     <button
       type="button"
       disabled={disabled}
+      title={skipped ? 'Rest day: keeps your streak and is not counted as missed. Tap to undo.' : 'Mark as a rest day: keeps your streak and is not counted as missed'}
       onClick={() => {
         if (skipped) onChange(null);
         else onChange({ skipped: true, note: entry?.note });
@@ -102,7 +103,7 @@ export const HabitSkipButton: React.FC<{
           : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
       }`}
     >
-      {skipped ? 'Skipped' : 'Skip'}
+      {skipped ? 'Rest day' : 'Rest'}
     </button>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, Check, CheckCircle2, Circle, Moon, Sparkles, Sunrise, Target } from 'lucide-react';
-import type { DiaryEntry, DiaryMood, NotificationSettings, Task } from '../types';
-import { DIARY_MOODS } from '../lib/diary';
+import type { DiaryEntry, DiaryMood, DiaryReflection, NotificationSettings, Task } from '../types';
+import { DIARY_MOODS, ENERGY_LEVELS, REFLECTION_PROMPTS } from '../lib/diary';
 import {
   TOP_PICKS,
   availableMinutesOn,
@@ -28,6 +28,10 @@ interface DailyPlanCardProps {
   onToggleComplete: (taskId: string) => void;
   onRescheduleTasks: (taskIds: string[], change: { date?: string; time?: string }) => void;
   onSaveDiaryEntry: (partial: Partial<DiaryEntry>) => boolean;
+  /** Saves the evening review as today's structured diary entry. */
+  onSaveReflection: (input: { date: string; mood: DiaryMood; energy?: number; reflection: DiaryReflection }) => boolean;
+  /** Today's saved evening review, to edit instead of starting blank. */
+  existingReflection?: DiaryEntry;
   /** Available planning time per weekday. */
   settings: Pick<NotificationSettings, 'availableMinutesByWeekday'>;
 }
@@ -89,20 +93,29 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
   today,
   onToggleComplete,
   onRescheduleTasks,
-  onSaveDiaryEntry,
+  onSaveReflection,
+  existingReflection,
   settings,
 }) => {
   const hour = useHour();
   const [plan, setPlan] = useState<DailyPlanState>(() => loadDailyPlan(today));
   const [picked, setPicked] = useState<string[]>([]);
   const [carryOver, setCarryOver] = useState<string[] | null>(null);
-  const [mood, setMood] = useState<DiaryMood>('good');
-  const [note, setNote] = useState('');
+  const [mood, setMood] = useState<DiaryMood>(existingReflection?.mood ?? 'good');
+  const [energy, setEnergy] = useState<number | undefined>(existingReflection?.energy);
+  // Null until edited: until then the fields show the saved review or the defaults.
+  const [answers, setAnswers] = useState<DiaryReflection | null>(null);
 
   useEffect(() => {
     setPlan(loadDailyPlan(today));
     setPicked([]);
     setCarryOver(null);
+    // A new day starts a new review.
+    setAnswers(null);
+    setMood(existingReflection?.mood ?? 'good');
+    setEnergy(existingReflection?.energy);
+    // Only when the day changes; the saved review is read through the props above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [today]);
 
   const update = (next: DailyPlanState) => {
@@ -294,13 +307,18 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
     const doneToday = tasks.filter((task) => task.date === today && task.completed).length;
     const totalToday = tasks.filter((task) => task.date === today).length;
     const moving = carryOver ?? unfinished.map((task) => task.id);
+    const defaults: DiaryReflection = existingReflection?.reflection ?? {
+      missed: unfinished.map((task) => task.title).join(', '),
+    };
+    const reflection = answers ?? defaults;
+    const setAnswer = (key: keyof DiaryReflection, value: string) => setAnswers({ ...reflection, [key]: value });
 
     const finish = () => {
-      if (note.trim() && !onSaveDiaryEntry({ date: today, mood, body: note.trim() })) return;
+      if (!onSaveReflection({ date: today, mood, energy, reflection })) return;
       const ids = moving.filter((id) => unfinished.some((task) => task.id === id));
       if (ids.length > 0) onRescheduleTasks(ids, { date: tomorrowOf(today) });
       update({ ...plan, reviewed: true });
-      setNote('');
+      setAnswers(null);
       setCarryOver(null);
     };
 
@@ -348,11 +366,23 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
           </div>
         )}
 
-        <div>
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
-            One line for your diary
+        <div className="space-y-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Reflect on today
           </p>
-          <div className="flex gap-1 mb-2" role="radiogroup" aria-label="Mood">
+          {REFLECTION_PROMPTS.map((prompt) => (
+            <label key={prompt.key} className="block space-y-1">
+              <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{prompt.question}</span>
+              <textarea
+                rows={2}
+                value={reflection[prompt.key] ?? ''}
+                onChange={(event) => setAnswer(prompt.key, event.target.value)}
+                className="w-full resize-y bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </label>
+          ))}
+          <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">How was my mood and energy?</p>
+          <div className="flex gap-1" role="radiogroup" aria-label="Mood">
             {DIARY_MOODS.map((item) => (
               <button
                 key={item.id}
@@ -372,19 +402,36 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
               </button>
             ))}
           </div>
-          <input
-            type="text"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="How did today go?"
-            aria-label="Diary note for today"
-            className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-          />
+          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Energy">
+            {ENERGY_LEVELS.map((level) => (
+              <button
+                key={level.value}
+                type="button"
+                role="radio"
+                aria-checked={energy === level.value}
+                title={level.label}
+                onClick={() => setEnergy(energy === level.value ? undefined : level.value)}
+                className={`h-9 min-w-9 rounded-xl px-2 text-xs font-bold transition-colors ${
+                  energy === level.value
+                    ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 dark:bg-amber-500/25 dark:text-amber-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                }`}
+              >
+                ⚡{level.value}
+              </button>
+            ))}
+            {energy !== undefined && (
+              <span className="self-center pl-1 text-[11px] text-slate-500 dark:text-slate-400">
+                {ENERGY_LEVELS.find((level) => level.value === energy)?.label}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-400">Saved to your diary as today’s evening review.</p>
         </div>
 
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" onClick={finish}>
-            {moving.length > 0 ? `Move ${moving.length} & finish` : 'Finish review'}
+            {moving.length > 0 ? `Move ${moving.length} & save review` : 'Save review'}
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => update({ ...plan, reviewed: true })}>
             Skip
