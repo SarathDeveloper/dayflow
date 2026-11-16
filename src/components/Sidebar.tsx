@@ -5,6 +5,7 @@ import {
   Calendar,
   CalendarDays,
   Clock,
+  FileLock2,
   Folder,
   Home,
   KeyRound,
@@ -14,6 +15,7 @@ import {
   Target,
   TrendingUp,
   Wallet,
+  Wrench,
   X,
   Zap,
 } from 'lucide-react';
@@ -41,7 +43,8 @@ function navItems(): NavItem[] {
     { id: 'categories', label: 'Categories', icon: Folder },
     { id: 'finance', label: 'Money', icon: Wallet },
     { id: 'stats', label: 'Streak', icon: TrendingUp },
-    { id: 'maintenance', label: 'Vehicle & Home', icon: Home },
+    { id: 'maintenance', label: 'Vehicle & Home', icon: Wrench },
+    { id: 'documents', label: 'Documents', icon: FileLock2 },
     ...(hasPasswordVault() ? [{ id: 'vault' as const, label: 'Password Vault', icon: KeyRound }] : []),
   ];
 }

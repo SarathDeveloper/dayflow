@@ -5,7 +5,7 @@
 
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession, MaintenanceItem } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -85,14 +85,26 @@ import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
 import { SplashScreen } from '@capacitor/splash-screen';
 import {
+  cancelAllExtraReminders,
   cancelAllTaskReminders,
   ensureNotificationSetup,
   getNativePermissionStatus,
   registerReminderListeners,
   requestExactAlarmPermission,
+  syncExtraReminders,
   syncScheduledNotifications,
   type NotificationSetupResult,
 } from './services/nativeNotificationService';
+import { buildExtraReminderPlans, DOCUMENTS_ROUTE, maintenanceIdFromRoute } from './lib/extraReminders';
+import { readDocumentReminders, subscribeDocumentReminders } from './services/documentReminderStore';
+import { loadMaintenanceFromStorage, saveMaintenanceToStorage } from './services/maintenanceStorage';
+import {
+  mergeMaintenanceItems, newMaintenanceItem, recordService, updateMaintenanceItem, updateServiceRecord, deleteServiceRecord,
+} from './lib/maintenance';
+import { consumeExternalResume, finishExternalResume, shouldIgnorePauseForExternal } from './lib/externalActivity';
+import { TodayMaintenanceCard } from './components/TodayMaintenanceCard';
+import { TodayDocumentsCard } from './components/TodayDocumentsCard';
+import type { ItemDraft, MaintenanceDocumentIntent, ServiceDraft } from './components/MaintenanceView';
 import { isNative, isNativeAndroid } from './lib/platform';
 import { isAppLockEnabled } from './lib/appLock';
 import {
@@ -164,6 +176,7 @@ import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
 const PasswordVaultView = lazy(() => import('./components/PasswordVaultView'));
 const MaintenanceView = lazy(() => import('./components/MaintenanceView'));
+const DocumentVaultView = lazy(() => import('./components/DocumentVaultView'));
 
 /** Skip the write while a profile switch is still loading, so the previous profile is not saved under the new keys. */
 function usePersistJson(key: string, value: unknown, enabled: boolean) {
@@ -240,6 +253,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const userHabitCheckInsKey = storageKeys.habitCheckIns;
   const userAlarmsKey = storageKeys.alarms;
   const userFocusSessionsKey = storageKeys.focusSessions;
+  const userMaintenanceKey = storageKeys.maintenanceItems;
   const userDiaryKey = storageKeys.diaryEntries;
   const STORAGE_KEY_SETTINGS = storageKeys.settings;
 
@@ -435,6 +449,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     return [];
   });
+  // Maintenance: damaged stored data is copied aside (never silently overwritten) and reported.
+  const [maintenanceLoad, setMaintenanceLoad] = useState(() => loadMaintenanceFromStorage(userMaintenanceKey));
+  const [maintenanceItems, setMaintenanceItems] = useState<MaintenanceItem[]>(() => maintenanceLoad.items);
+  const [maintenanceSaveError, setMaintenanceSaveError] = useState<string | null>(null);
+  const [documentIntent, setDocumentIntent] = useState<MaintenanceDocumentIntent | null>(null);
   const [ringing, setRinging] = useState<RingSession | null>(null);
   // Alarm songs live on this device only; reminders pick from these ids.
   const { songs } = useSongs();
@@ -643,6 +662,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const savedFocusSessions = localStorage.getItem(userFocusSessionsKey);
       setFocusSessions(savedFocusSessions ? JSON.parse(savedFocusSessions) : []);
 
+      const reloadedMaintenance = loadMaintenanceFromStorage(userMaintenanceKey);
+      setMaintenanceLoad(reloadedMaintenance);
+      setMaintenanceItems(reloadedMaintenance.items);
+
       const savedDiary = localStorage.getItem(userDiaryKey);
       setDiaryEntries(savedDiary ? JSON.parse(savedDiary) : []);
 
@@ -655,7 +678,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     } finally {
       setReadyHydrationToken(String(dataEpoch));
     }
-  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userMaintenanceKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   usePersistJson(userTasksKey, tasks, canPersist);
@@ -677,6 +700,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
   usePersistJson(userHabitCheckInsKey, habitCheckIns, canPersist);
   usePersistJson(userAlarmsKey, alarms, canPersist);
   usePersistJson(userFocusSessionsKey, focusSessions, canPersist);
+  useEffect(() => {
+    if (!canPersist) return;
+    setMaintenanceSaveError(saveMaintenanceToStorage(userMaintenanceKey, maintenanceItems));
+  }, [userMaintenanceKey, maintenanceItems, canPersist]);
   usePersistJson(userDiaryKey, diaryEntries, canPersist);
   usePersistJson(userSavingsStreakKey, savingsStreak, canPersist);
 
@@ -719,6 +746,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     habitCheckIns,
     alarms,
     focusSessions,
+    maintenanceItems,
     diaryEntries,
   ]);
 
@@ -840,6 +868,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
         removeListeners = await registerReminderListeners({
           onDue: (taskId) => {
+            // Document / maintenance reminders: the system notification is enough while the app is open.
+            if (taskId === DOCUMENTS_ROUTE || maintenanceIdFromRoute(taskId)) return;
             if (taskId.startsWith('habit:')) {
               setActiveTab('habits');
               return;
@@ -848,6 +878,15 @@ export default function App({ skipInitialLock = false }: AppProps) {
             if (task) setActiveAlert({ task, triggeredAt: new Date() });
           },
           onOpened: (taskId) => {
+            if (taskId === DOCUMENTS_ROUTE) {
+              // The vault always asks for its passphrase first.
+              setActiveTab('documents');
+              return;
+            }
+            if (maintenanceIdFromRoute(taskId)) {
+              setActiveTab('maintenance');
+              return;
+            }
             if (taskId === WEEKLY_REPORT_TASK_ID) {
               setActiveTab('today');
               openWeeklyReportRef.current();
@@ -987,6 +1026,32 @@ export default function App({ skipInitialLock = false }: AppProps) {
     return () => clearTimeout(timer);
   }, [tasks, settings, habits, habitCheckIns, goals, alarms, songIds, nativeSetup?.granted, pushNativeSchedule]);
 
+  // Document expiry + maintenance reminders use negative notification ids, so they
+  // never collide with (or get cancelled by) the task/habit sync above.
+  const maintenanceItemsRef = useRef(maintenanceItems);
+  maintenanceItemsRef.current = maintenanceItems;
+  const pushExtraReminders = useCallback((granted: boolean) => {
+    if (!isNativeAndroid()) return;
+    const plans = buildExtraReminderPlans({
+      documents: readDocumentReminders().entries,
+      maintenance: maintenanceItemsRef.current,
+      now: new Date(),
+    });
+    void syncExtraReminders(plans, { granted }).catch((e) => console.warn('Failed to sync document/maintenance reminders:', e));
+  }, []);
+  const [documentReminderTick, setDocumentReminderTick] = useState(0);
+  useEffect(() => subscribeDocumentReminders(() => setDocumentReminderTick((value) => value + 1)), []);
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    const timer = setTimeout(() => pushExtraReminders(Boolean(nativeSetup?.granted)), 600);
+    return () => clearTimeout(timer);
+  }, [maintenanceItems, documentReminderTick, nativeSetup?.granted, pushExtraReminders]);
+  const extraReminderNote = !isNativeAndroid()
+    ? 'On the website these reminders show on Today only; notifications need the Android app.'
+    : nativeSetup && !nativeSetup.granted
+      ? 'Notifications are off for Dayflow, so these reminders only show on Today. Turn them on in Android settings.'
+      : null;
+
   writeLeaveBackupRef.current = () => {
     const file = buildBackup({
       tasks,
@@ -1005,6 +1070,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habitCheckIns,
       alarms,
       focusSessions,
+      maintenanceItems,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -1047,7 +1113,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   useEffect(() => {
     if (isNative()) return;
     const onHide = () => {
-      if (document.visibilityState === 'hidden' && !isChoosingBackupFolder()) {
+      if (document.visibilityState === 'hidden' && !isChoosingBackupFolder() && !shouldIgnorePauseForExternal()) {
         writeLeaveBackupRef.current();
       }
     };
@@ -1064,7 +1130,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     let disposed = false;
     void CapApp.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) {
-        if (shouldIgnoreAppPause() || isChoosingBackupFolder()) return;
+        if (shouldIgnoreAppPause() || isChoosingBackupFolder() || shouldIgnorePauseForExternal()) return;
         writeLeaveBackupRef.current();
         if (isAppLockEnabled()) {
           setAppLocked(true);
@@ -1072,8 +1138,13 @@ export default function App({ skipInitialLock = false }: AppProps) {
         }
         return;
       }
+      const backFromPicker = consumeExternalResume();
+      // Clear the picker coverage once every listener (this one and the document vault) has
+      // seen this resume, so a later real background locks as usual.
+      if (backFromPicker) window.setTimeout(finishExternalResume, 1500);
       if (
         !isChoosingBackupFolder() &&
+        !backFromPicker &&
         !shouldIgnoreAppResume() &&
         nativeBootReadyRef.current &&
         isAppLockEnabled()
@@ -1087,6 +1158,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         setPermissionStatus(granted ? 'granted' : 'denied');
         setNativeSetup((prev) => (prev ? { ...prev, granted } : prev));
         pushNativeSchedule(granted);
+        pushExtraReminders(granted);
         try {
           const { events } = await DayflowAlarm.consumeEvents();
           for (const event of events ?? []) {
@@ -1742,8 +1814,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
       ...habitCheckIns.map((c) => c.id),
       ...diaryEntries.map((entry) => entry.id),
       ...focusSessions.map((session) => session.id),
+      ...maintenanceItems.map((item) => item.id),
     ]);
-    if (isNativeAndroid()) void cancelAllTaskReminders();
+    if (isNativeAndroid()) {
+      void cancelAllTaskReminders();
+      void cancelAllExtraReminders();
+    }
     const freshTasks = getInitialTasks();
     setTasks(freshTasks);
     setCategories(INITIAL_CATEGORIES);
@@ -1771,6 +1847,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setAlarms([]);
     setDiaryEntries([]);
     setFocusSessions([]);
+    setMaintenanceItems([]);
     setRecentlyDeletedDiary(null);
     setIsSettingsOpen(false);
   };
@@ -1794,6 +1871,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habitCheckIns,
       alarms,
       focusSessions,
+      maintenanceItems,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -1830,6 +1908,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (present.includes('habitCheckIns')) setHabitCheckIns(data.habitCheckIns ?? []);
     if (present.includes('alarms')) setAlarms(data.alarms ?? []);
     if (present.includes('focusSessions')) setFocusSessions(data.focusSessions ?? []);
+    if (present.includes('maintenanceItems')) setMaintenanceItems(data.maintenanceItems ?? []);
     if (present.includes('diaryEntries')) {
       setDiaryEntries(data.diaryEntries ?? []);
       setRecentlyDeletedDiary(null);
@@ -1883,6 +1962,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       habitCheckIns,
       alarms,
       focusSessions,
+      maintenanceItems,
       diaryEntries,
       billTemplates,
       billPayments,
@@ -1948,6 +2028,52 @@ export default function App({ skipInitialLock = false }: AppProps) {
       void showAlert({ title: 'Could not read that file', message: 'Choose the file again and retry.', tone: 'warning' });
     };
     reader.readAsText(file);
+  };
+
+  // Maintenance. The lib stamps updatedAt on every change and throws user-facing errors,
+  // which MaintenanceView shows. A deleted item leaves a tombstone so sync does not revive it.
+  const changeMaintenanceItem = (id: string, change: (item: MaintenanceItem) => MaintenanceItem) => {
+    const item = maintenanceItems.find((candidate) => candidate.id === id);
+    if (!item) throw new Error('This maintenance item no longer exists.');
+    const next = change(item);
+    setMaintenanceItems((prev) => prev.map((candidate) => (candidate.id === id ? next : candidate)));
+  };
+  const maintenanceLinkContext = { items: maintenanceItems, transactions };
+  const handleCreateMaintenance = (draft: ItemDraft) => {
+    const item = newMaintenanceItem(draft, new Date().toISOString());
+    setMaintenanceItems((prev) => [...prev, item]);
+  };
+  const handleUpdateMaintenance = (id: string, draft: ItemDraft) =>
+    changeMaintenanceItem(id, (item) => updateMaintenanceItem(item, draft, new Date().toISOString()));
+  const handleDeleteMaintenance = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    setMaintenanceItems((prev) => prev.filter((item) => item.id !== id));
+  };
+  const handleRecordService = (id: string, service: ServiceDraft) =>
+    changeMaintenanceItem(id, (item) => recordService(item, service, new Date().toISOString(), maintenanceLinkContext));
+  const handleUpdateService = (id: string, recordId: string, service: ServiceDraft) =>
+    changeMaintenanceItem(id, (item) =>
+      updateServiceRecord(
+        item,
+        recordId,
+        { date: service.date, notes: service.notes, cost: service.cost ?? null, transactionId: service.transactionId ?? null },
+        new Date().toISOString(),
+        maintenanceLinkContext,
+      ),
+    );
+  const handleDeleteService = (id: string, recordId: string) =>
+    changeMaintenanceItem(id, (item) => deleteServiceRecord(item, recordId, new Date().toISOString()));
+  /** Merges an export file (newer edits win). Items new to this device are re-stamped so sync keeps them. */
+  const handleImportMaintenance = (incoming: MaintenanceItem[]): number => {
+    const now = new Date().toISOString();
+    const known = new Map<string, MaintenanceItem>(maintenanceItems.map((item) => [item.id, item]));
+    const merged = mergeMaintenanceItems(maintenanceItems, incoming).map((item) =>
+      known.has(item.id) ? item : { ...item, updatedAt: now },
+    );
+    const changed = merged.filter((item) => known.get(item.id)?.updatedAt !== item.updatedAt).length;
+    unmarkDeleted(storageKeys, merged.filter((item) => !known.has(item.id)).map((item) => item.id));
+    setMaintenanceItems(merged);
+    return changed;
   };
 
   // Goals and habits
@@ -3211,7 +3337,35 @@ export default function App({ skipInitialLock = false }: AppProps) {
       <main className="max-w-5xl lg:max-w-6xl mx-auto px-4 py-5 lg:pl-6 lg:pr-8">
         {activeTab === 'maintenance' && (
           <Suspense fallback={<p role="status">Loading maintenance…</p>}>
-            <MaintenanceView />
+            <MaintenanceView
+              items={maintenanceItems}
+              transactions={transactions}
+              reminderNote={extraReminderNote}
+              storageError={maintenanceSaveError}
+              damagedNotice={maintenanceLoad.notice}
+              damagedKey={maintenanceLoad.damagedKey}
+              onCreate={handleCreateMaintenance}
+              onUpdate={handleUpdateMaintenance}
+              onDelete={handleDeleteMaintenance}
+              onRecordService={handleRecordService}
+              onUpdateService={handleUpdateService}
+              onDeleteService={handleDeleteService}
+              onImport={handleImportMaintenance}
+              onOpenDocuments={(intent) => {
+                setDocumentIntent(intent);
+                setActiveTab('documents');
+              }}
+            />
+          </Suspense>
+        )}
+        {activeTab === 'documents' && !appLocked && !ringing && (
+          <Suspense fallback={<p role="status">Loading documents…</p>}>
+            <DocumentVaultView
+              maintenanceItems={maintenanceItems}
+              intent={documentIntent}
+              onIntentHandled={() => setDocumentIntent(null)}
+              reminderNote={extraReminderNote}
+            />
           </Suspense>
         )}
         {activeTab === 'vault' && !appLocked && !ringing && (
@@ -3247,6 +3401,20 @@ export default function App({ skipInitialLock = false }: AppProps) {
               when={selectedDate === todayStr ? 'today' : selectedDate > todayStr ? 'future' : 'past'}
             />
             <TodayAlarmCard alarms={alarms} onOpen={() => setActiveTab('alarms')} />
+            <TodayMaintenanceCard
+              items={maintenanceItems}
+              today={todayStr}
+              reminderNote={extraReminderNote}
+              onOpen={() => setActiveTab('maintenance')}
+            />
+            <TodayDocumentsCard
+              today={todayStr}
+              reminderNote={extraReminderNote}
+              onOpen={() => {
+                setDocumentIntent(null);
+                setActiveTab('documents');
+              }}
+            />
             <TodayHabitsCard
               date={selectedDate}
               goals={goals}

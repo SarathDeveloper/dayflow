@@ -60,11 +60,20 @@ features, setup and the Android release process.
   (`dayflow_daily_plan_v1`), app-lock flag (`dayflow_app_lock`) and the website
   lock's WebAuthn credential id (`dayflow_web_lock_credential_v1`), alarm song
   files (Android `filesDir/songs/`, website IndexedDB `dayflow-media`), bank SMS
-  queue (`dayflow_bank_sms_*`). A reminder's `songId` does sync, so it may name
+  queue (`dayflow_bank_sms_*`), the document vault (IndexedDB `dayflow-documents`,
+  its own passphrase and encrypted backup) and its plaintext reminder schedule
+  (`dayflow_document_reminders_v1`: dates + random keys only, titles only if the
+  user opts in). A reminder's `songId` does sync, so it may name
   a song this device lacks: `pickSong` then falls back to the oldest song, then
   the chime. A new collection that should sync must be added to
   `SyncData` in `lib/persistence.ts`, `RECORD_COLLECTIONS` in
   `lib/cloudRecords.ts` and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
+- **Notification ids: tasks/habits use ids >= 0, document and maintenance
+  reminders use ids < 0** (`lib/extraReminders.ts`). Each sync and cancel-all only
+  touches its own range; keep it that way or one feature cancels the other's alarms.
+- **System pickers background the app.** Wrap a file picker / save screen in
+  `beginExternalActivity()` (`lib/externalActivity.ts`) so the app lock and the
+  document vault do not lock mid-pick; the window is capped at 3 minutes.
 - **Record ids must be unique across all collections.** Tombstones and the
   server row key are the id alone.
 - **History is scored "as it was then".** Progress score, weekly report and
