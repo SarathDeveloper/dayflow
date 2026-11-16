@@ -28,6 +28,7 @@ const emptyCollections = (): BackupCollections => ({
   alarms: [],
   diaryEntries: [],
   focusSessions: [],
+  maintenanceItems: [],
   billTemplates: [],
   billPayments: [],
   settings: DEFAULT_SETTINGS,
@@ -88,6 +89,9 @@ describe('buildBackup / parseBackup', () => {
     expect(parsed.data.alarms).toEqual([]);
     expect(parsed.data.financeCategories).toBeUndefined();
     expect(parsed.present).not.toContain('financeCategories');
+    expect(parsed.data.maintenanceItems).toBeUndefined();
+    expect(parsed.present).not.toContain('maintenanceItems');
+    expect(parsed.warnings).toEqual([]);
     expect(parsed.data.settings).toEqual(DEFAULT_SETTINGS);
     expect(parsed.present).toContain('settings');
   });
@@ -119,6 +123,40 @@ describe('buildBackup / parseBackup', () => {
     const second = { ...first, exportedAt: '2099-01-01T00:00:00.000Z' };
     expect(automaticBackupSignature(first)).toBe(automaticBackupSignature(second));
     expect(automaticBackupSignature({ ...first, tasks: [] })).not.toBe(automaticBackupSignature(first));
+  });
+
+  it('restores valid maintenance items and leaves damaged ones out with a warning', () => {
+    const stamp = '2026-11-01T06:00:00.000Z';
+    const good = {
+      id: 'mnt-1',
+      asset: 'Honda City',
+      kind: 'vehicle',
+      title: 'Engine oil',
+      due: '2026-12-01',
+      intervalMonths: 6,
+      reminderDays: [3, 0],
+      history: [{ id: 'svc-1', date: '2026-06-01', notes: '', cost: 2500, createdAt: stamp, updatedAt: stamp }],
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    const file = buildBackup({
+      ...emptyCollections(),
+      maintenanceItems: [good as BackupCollections['maintenanceItems'][number]],
+      theme: 'light',
+      budgetAlertState: {},
+    });
+    const roundTrip = parseBackup(JSON.parse(JSON.stringify(file)));
+    expect(roundTrip.present).toContain('maintenanceItems');
+    expect(roundTrip.data.maintenanceItems).toEqual([good]);
+    expect(roundTrip.warnings).toEqual([]);
+
+    const damaged = parseBackup({
+      app: 'dayflow',
+      version: 1,
+      maintenanceItems: [good, { ...good, id: 'mnt-2', due: '2026-02-30' }, { id: 'mnt-3' }],
+    });
+    expect(damaged.data.maintenanceItems).toEqual([good]);
+    expect(damaged.warnings).toEqual(['2 damaged maintenance items were left out of the restore.']);
   });
 
   it('rejects files that are not backups', () => {

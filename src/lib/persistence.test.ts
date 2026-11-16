@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Account, DiaryEntry, FinanceTransaction, Goal, Habit, HabitCheckIn, LedgerSettings } from '../types';
+import type { Account, DiaryEntry, FinanceTransaction, Goal, Habit, HabitCheckIn, LedgerSettings, MaintenanceItem } from '../types';
 import {
   DATA_SCHEMA_VERSION,
   DEFAULT_SETTINGS,
@@ -371,6 +371,57 @@ describe('sync envelopes', () => {
     expect(isEnvelopeEmpty(envelope({ diaryEntries: [note] }))).toBe(false);
     expect(isValidEnvelope(envelope({}))).toBe(true);
     expect(isValidEnvelope(envelope({ diaryEntries: 'nope' as unknown as DiaryEntry[] }))).toBe(false);
+  });
+
+  it('round-trips maintenance items and drops damaged ones on read', () => {
+    const keys = getStorageKeys(null);
+    const saved: MaintenanceItem = {
+      id: 'mnt-1',
+      asset: 'Kitchen',
+      kind: 'home',
+      title: 'Water filter',
+      due: '2026-12-10',
+      intervalMonths: 3,
+      reminderDays: [3, 0],
+      history: [],
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    writeSnapshot(keys, { ...emptyData(), maintenanceItems: [saved] });
+    expect(readSnapshot(keys).maintenanceItems).toEqual([saved]);
+    expect(countRecords(readSnapshot(keys))).toBe(1);
+    expect(keys.maintenanceItems).toBe('dayflow_maintenance_items_v1');
+    expect(getStorageKeys('user-1').maintenanceItems).toBe('dayflow_maintenance_items_user-1');
+
+    localStorage.setItem(keys.maintenanceItems, JSON.stringify([saved, { id: 'broken' }]));
+    expect(readSnapshot(keys).maintenanceItems).toEqual([saved]);
+  });
+
+  it('merges maintenance items per record, newer edit wins, tombstones respected', () => {
+    const base: MaintenanceItem = {
+      id: 'mnt-1',
+      asset: 'Car',
+      kind: 'vehicle',
+      title: 'Oil',
+      due: '2026-12-01',
+      intervalMonths: 6,
+      reminderDays: [3, 0],
+      history: [],
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    const newer = { ...base, title: 'Oil and filter', updatedAt: '2026-10-03T00:00:00.000Z' };
+    const gone = { ...base, id: 'mnt-2' };
+    const merged = mergeEnvelopes(
+      envelope({ maintenanceItems: [base] }),
+      envelope(
+        { maintenanceItems: [newer, gone] },
+        { deviceId: 'device-b', tombstones: { 'mnt-2': '2026-10-04T00:00:00.000Z' } }
+      )
+    );
+    expect(merged.data.maintenanceItems).toEqual([newer]);
+    expect(isEnvelopeEmpty(envelope({ maintenanceItems: [base] }))).toBe(false);
+    expect(isValidEnvelope(envelope({ maintenanceItems: 'nope' as unknown as MaintenanceItem[] }))).toBe(false);
   });
 
   it('keeps the newer diary note when both devices edited it', () => {

@@ -85,7 +85,7 @@ export interface NotificationSettings {
   };
 }
 
-export type ActiveTab = 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings';
+export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents';
 
 export type GoalStatus = 'active' | 'paused' | 'completed';
 
@@ -430,4 +430,39 @@ export interface BudgetAlert {
 export interface ActiveAlert {
   task: Task;
   triggeredAt: Date;
+}
+
+export type MaintenanceKind = 'vehicle' | 'home';
+
+/** One completed service of a maintenance item. Ids are unique across all collections. */
+export interface MaintenanceServiceRecord {
+  id: string;
+  date: string; // YYYY-MM-DD, local
+  notes: string;
+  /**
+   * Amount paid in rupees, when it is NOT already in Money. A record linked to a
+   * Money transaction (`transactionId`) takes its cost from that transaction, so
+   * the spend is never counted twice.
+   */
+  cost?: number;
+  /** An existing expense transaction in Money that paid for this service. */
+  transactionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A recurring, date-based vehicle or home maintenance task. Synced like other collections. */
+export interface MaintenanceItem {
+  id: string;
+  userId?: string;
+  asset: string; // "Honda City", "Kitchen water filter"
+  kind: MaintenanceKind;
+  title: string; // "Engine oil change"
+  due: string; // next due date, YYYY-MM-DD, local
+  intervalMonths: number; // 1..120
+  /** Days before `due` to remind (0 = on the due date). Empty = no reminders. */
+  reminderDays: number[];
+  history: MaintenanceServiceRecord[];
+  createdAt: string;
+  updatedAt: string;
 }

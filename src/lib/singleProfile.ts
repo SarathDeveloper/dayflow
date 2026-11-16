@@ -114,6 +114,7 @@ function writeMergedSnapshot(
     'habitCheckIns',
     'alarms',
     'diaryEntries',
+    'maintenanceItems',
     'billTemplates',
     'billPayments',
     'settings',
@@ -172,6 +173,11 @@ function mergeSnapshots(globalData: SyncData, profileData: SyncData, tombstones:
     ),
     alarms: mergeCollection(globalData.alarms ?? [], profileData.alarms ?? [], tombstones),
     diaryEntries: mergeCollection(globalData.diaryEntries ?? [], profileData.diaryEntries ?? [], tombstones),
+    maintenanceItems: mergeCollection(
+      globalData.maintenanceItems ?? [],
+      profileData.maintenanceItems ?? [],
+      tombstones
+    ),
     billTemplates: mergeCollection(globalData.billTemplates, profileData.billTemplates, tombstones),
     billPayments: mergeCollection(globalData.billPayments, profileData.billPayments, tombstones),
     settings: globalData.settings,

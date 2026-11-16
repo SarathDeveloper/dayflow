@@ -15,6 +15,7 @@ import type {
   Habit,
   HabitCheckIn,
   LedgerSettings,
+  MaintenanceItem,
   MonthlyBudget,
   NotificationSettings,
   SavingsEntry,
@@ -23,6 +24,7 @@ import type {
 } from '../types';
 import { DEFAULT_SETTINGS } from './persistence';
 import { todayString } from './ledger';
+import { parseMaintenanceItems } from './maintenance';
 
 export const BACKUP_APP = 'dayflow';
 export const BACKUP_VERSION = 1;
@@ -45,6 +47,7 @@ export const BACKUP_ARRAY_KEYS = [
   'alarms',
   'diaryEntries',
   'focusSessions',
+  'maintenanceItems',
   'billTemplates',
   'billPayments',
 ] as const;
@@ -70,6 +73,7 @@ export interface BackupCollections {
   alarms: Alarm[];
   diaryEntries: DiaryEntry[];
   focusSessions: FocusSession[];
+  maintenanceItems: MaintenanceItem[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   settings: NotificationSettings;
@@ -90,6 +94,8 @@ export interface ParsedBackup {
   data: Partial<BackupCollections>;
   theme?: 'light' | 'dark';
   budgetAlertState?: BudgetAlertState;
+  /** Things the import left out, in plain words, for the person restoring. */
+  warnings: string[];
 }
 
 export class BackupError extends Error {
@@ -139,6 +145,7 @@ export function buildBackup(
     alarms: input.alarms,
     diaryEntries: input.diaryEntries,
     focusSessions: input.focusSessions ?? [],
+    maintenanceItems: input.maintenanceItems ?? [],
     billTemplates: input.billTemplates,
     billPayments: input.billPayments,
     settings: input.settings,
@@ -200,13 +207,31 @@ export function parseBackup(raw: unknown): ParsedBackup {
   for (const key of BACKUP_ARRAY_KEYS) {
     if (full) {
       // Older backups omit these lists. Leaving them absent keeps what is saved
-      // (custom category names, focus sessions recorded since).
-      if ((key === 'financeCategories' || key === 'focusSessions') && obj[key] === undefined) continue;
+      // (custom category names, focus sessions recorded since, maintenance).
+      if (
+        (key === 'financeCategories' || key === 'focusSessions' || key === 'maintenanceItems') &&
+        obj[key] === undefined
+      ) {
+        continue;
+      }
       data[key] = (Array.isArray(obj[key]) ? obj[key] : []) as never;
       present.push(key);
     } else if (Array.isArray(obj[key])) {
       data[key] = obj[key] as never;
       present.push(key);
+    }
+  }
+
+  // Maintenance items are checked strictly: a damaged item is left out rather
+  // than restored, and the person is told how many.
+  const warnings: string[] = [];
+  if (data.maintenanceItems !== undefined) {
+    const { items, rejected } = parseMaintenanceItems(data.maintenanceItems);
+    data.maintenanceItems = items;
+    if (rejected > 0) {
+      warnings.push(
+        `${rejected} damaged maintenance ${rejected === 1 ? 'item was' : 'items were'} left out of the restore.`
+      );
     }
   }
 
@@ -220,7 +245,7 @@ export function parseBackup(raw: unknown): ParsedBackup {
     ? (obj.budgetAlertState as BudgetAlertState)
     : undefined;
 
-  return { mode: full ? 'full' : 'partial', present, data, theme, budgetAlertState };
+  return { mode: full ? 'full' : 'partial', present, data, theme, budgetAlertState, warnings };
 }
 
 /**

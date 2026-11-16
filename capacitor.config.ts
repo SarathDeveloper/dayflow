@@ -6,6 +6,8 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   android: {
     allowMixedContent: false,
+    // The password vault sends sensitive clipboard values across the native bridge.
+    loggingBehavior: 'none',
     backgroundColor: '#0f172a',
   },
   plugins: {

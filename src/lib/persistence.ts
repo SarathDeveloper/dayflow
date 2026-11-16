@@ -22,12 +22,14 @@ import type {
   Habit,
   HabitCheckIn,
   LedgerSettings,
+  MaintenanceItem,
   MonthlyBudget,
   NotificationSettings,
   SavingsEntry,
   SavingsGoal,
   Task,
 } from '../types';
+import { parseMaintenanceItems } from './maintenance';
 
 export interface StorageKeys {
   tasks: string;
@@ -47,6 +49,7 @@ export interface StorageKeys {
   alarms: string;
   diaryEntries: string;
   focusSessions: string;
+  maintenanceItems: string;
   billTemplates: string;
   billPayments: string;
   alertState: string;
@@ -72,6 +75,7 @@ const GLOBAL_KEYS: StorageKeys = {
   alarms: 'daily_alarms_v1',
   diaryEntries: 'daily_diary_entries_v1',
   focusSessions: 'daily_focus_sessions_v1',
+  maintenanceItems: 'dayflow_maintenance_items_v1',
   billTemplates: 'daily_finance_bill_templates_v1',
   billPayments: 'daily_finance_bill_payments_v1',
   alertState: 'daily_finance_alert_state_v1',
@@ -104,6 +108,7 @@ export function getStorageKeys(userId?: string | null): StorageKeys {
     alarms: `daily_alarms_${userId}`,
     diaryEntries: `daily_diary_entries_${userId}`,
     focusSessions: `daily_focus_sessions_${userId}`,
+    maintenanceItems: `dayflow_maintenance_items_${userId}`,
     billTemplates: `daily_finance_bill_templates_${userId}`,
     billPayments: `daily_finance_bill_payments_${userId}`,
     alertState: `daily_finance_alert_state_${userId}`,
@@ -168,6 +173,7 @@ export interface SyncData {
   alarms?: Alarm[];
   diaryEntries?: DiaryEntry[];
   focusSessions?: FocusSession[];
+  maintenanceItems?: MaintenanceItem[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   settings: NotificationSettings;
@@ -206,6 +212,9 @@ export function readSnapshot(keys: StorageKeys): SyncData {
     alarms: readJson<Alarm[]>(keys.alarms, []),
     diaryEntries: readJson<DiaryEntry[]>(keys.diaryEntries, []),
     focusSessions: readJson<FocusSession[]>(keys.focusSessions, []),
+    // Validated: a damaged item is never pushed to the cloud. App keeps the raw
+    // text aside (see loadMaintenanceStore) before anything saves over it.
+    maintenanceItems: parseMaintenanceItems(readJson<unknown>(keys.maintenanceItems, [])).items,
     billTemplates: readJson<BillTemplate[]>(keys.billTemplates, []),
     billPayments: readJson<BillPayment[]>(keys.billPayments, []),
     settings: {
@@ -233,6 +242,7 @@ export function writeSnapshot(keys: StorageKeys, data: SyncData): void {
   writeJson(keys.alarms, data.alarms ?? []);
   writeJson(keys.diaryEntries, data.diaryEntries ?? []);
   writeJson(keys.focusSessions, data.focusSessions ?? []);
+  writeJson(keys.maintenanceItems, data.maintenanceItems ?? []);
   writeJson(keys.billTemplates, data.billTemplates);
   writeJson(keys.billPayments, data.billPayments);
   writeJson(keys.settings, data.settings);
@@ -257,6 +267,7 @@ export function countRecords(data: SyncData): number {
     (data.alarms?.length ?? 0) +
     (data.diaryEntries?.length ?? 0) +
     (data.focusSessions?.length ?? 0) +
+    (data.maintenanceItems?.length ?? 0) +
     data.billTemplates.length +
     data.billPayments.length
   );

@@ -1,17 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { App as CapApp } from '@capacitor/app';
 import { ArrowRightLeft, KeyRound, Loader2, LogOut } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useAuthGate } from '../../hooks/useAuthGate';
 import { updatePassword } from '../../services/cloudSyncService';
 import { AuthScreen, MIN_PASSWORD_LENGTH } from './AuthScreen';
 import { AuthShell, authInputClass } from './AuthShell';
+import { hasPasswordVault } from '../../services/passwordVault';
+
+const PasswordVaultView = lazy(() => import('../PasswordVaultView'));
 
 interface AuthGateProps {
   /** Renders the app. `justSignedIn` is true when the person typed their password moments ago. */
   children: (props: { justSignedIn: boolean }) => React.ReactNode;
 }
 
-/** Login is required: nothing of the app renders until a session exists. */
+/** The main app requires a session. Android can open its local vault separately. */
 export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
   const gate = useAuthGate();
   // Was a pre-app screen shown in this run? Then the app opens straight after
@@ -20,7 +24,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
   const sawGate = useRef(false);
   if (gate.view !== 'app') sawGate.current = true;
 
-  if (gate.view === 'signed-out') return <AuthScreen />;
+  if (gate.view === 'signed-out') return <SignedOutScreen />;
   if (gate.view === 'loading') {
     return (
       <AuthShell title="Opening your reset link…">
@@ -36,6 +40,26 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
   }
   return <>{children({ justSignedIn: sawGate.current })}</>;
 };
+
+function SignedOutScreen() {
+  const [vaultOpen, setVaultOpen] = useState(false);
+  useEffect(() => {
+    if (!vaultOpen) return;
+    const listener = CapApp.addListener('backButton', () => setVaultOpen(false));
+    return () => { void listener.then((handle) => handle.remove()).catch(() => {}); };
+  }, [vaultOpen]);
+
+  if (!vaultOpen) {
+    return <AuthScreen onOpenVault={hasPasswordVault() ? () => setVaultOpen(true) : undefined} />;
+  }
+  return (
+    <main className="min-h-dvh bg-stone-50 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <Suspense fallback={<p role="status">Loading vault…</p>}>
+        <PasswordVaultView onExit={() => setVaultOpen(false)} />
+      </Suspense>
+    </main>
+  );
+}
 
 const ConfirmSwitchScreen: React.FC<{
   email: string;

@@ -63,6 +63,7 @@ Sign in with email and password to use the app (when cloud sync is configured). 
 - Dark splash screen and status bar that follows the theme
 - Reminder reliability diagnostics (notification permission, exact alarms, OEM battery tips)
 - Optional cloud sync with record-level merge
+- Offline Password Vault under More, with a separate passphrase, password generator, and encrypted backup and restore
 
 ## Tech Stack
 
@@ -366,7 +367,15 @@ scripts/
 
 ## Data and Privacy
 
-- All data is stored in `localStorage` on this device, under one set of keys. There is no local account.
+### Android Password Vault
+
+Open **More → Password Vault** to create a vault or restore an encrypted backup. The Android sign-in screen also offers **Open Password Vault offline**, including on a fresh install. The vault locks when you leave it, background Dayflow, or stay idle for one minute.
+
+Use **Save encrypted backup** to save a copy through Android's file picker. Restoring it on a fresh install requires the passphrase in use when you saved the copy. After changing your passphrase, save a fresh backup. The vault is stored in Android's private storage outside Dayflow's regular backup and sync. Keep the vault passphrase and at least one encrypted backup somewhere you can reach if you lose the phone.
+
+### Tasks, money, and diary
+
+- Dayflow stores its regular app data in `localStorage` on this device, under one set of keys.
 - Signing in is required whenever cloud sync is configured. Desktop and phone stay in sync by signing in to the same account. Sync now merges; Restore replaces this device and drops edits that were never uploaded.
 - Synced data is stored in the app's Supabase database. Row-level security limits every row to the account that owns it; signed-out requests get no access at all.
 - Clearing app/browser storage erases the data on that device. Sign in again (or use Export JSON) to get it back.

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
 import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
@@ -70,7 +70,8 @@ import {
 import { NotificationBanner } from './components/NotificationBanner';
 import { SettingsModal } from './components/SettingsModal';
 import { BottomNav } from './components/BottomNav';
-import { Sidebar } from './components/Sidebar';
+import { MobileSidebar, Sidebar } from './components/Sidebar';
+import { HomeView } from './components/HomeView';
 import { InstallPrompt } from './components/InstallPrompt';
 import { AppLockScreen } from './components/AppLockScreen';
 import { Dropdown } from './components/ui/Dropdown';
@@ -153,6 +154,7 @@ import { isWeeklyReportSeen, markWeeklyReportSeen, reportWeekStart } from './lib
 import { DayflowAlarm } from './services/dayflowAlarm';
 import { clearHomeWidgets, updateHomeWidgets } from './services/homeWidgets';
 import { buildWidgetSnapshot } from './lib/widgetSnapshot';
+import { homeSummary } from './lib/homeSummary';
 import { audioService } from './services/audioService';
 import { canSetCheckIn, habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
@@ -160,6 +162,8 @@ import { useAppUpdates } from './hooks/useAppUpdates';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
+const PasswordVaultView = lazy(() => import('./components/PasswordVaultView'));
+const MaintenanceView = lazy(() => import('./components/MaintenanceView'));
 
 /** Skip the write while a profile switch is still loading, so the previous profile is not saved under the new keys. */
 function usePersistJson(key: string, value: unknown, enabled: boolean) {
@@ -472,7 +476,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
   useAppUpdates(nativeBootReady);
 
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('today');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('home');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const openMenu = useCallback(() => setIsMenuOpen(true), []);
+  const closeMenu = useCallback(() => setIsMenuOpen(false), []);
   const [permissionStatus, setPermissionStatus] = useState<
     NotificationPermission | 'unsupported'
   >(() => NotificationService.getPermissionStatus());
@@ -1393,6 +1400,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
   // The handler body is recreated every render and reached through a ref so the
   // native listener is registered exactly once (re-registering on every modal
   // change leaked listeners and made one back press fire several handlers).
+  // The drawer never stays open over a tab switch (e.g. a notification tap), an alert,
+  // the weekly report, a ringing alarm or the app lock.
+  useEffect(() => {
+    setIsMenuOpen(false);
+  }, [activeTab, activeAlert, reportWeek, ringing, appLocked]);
+
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
     // An open alert or confirmation closes first, as if cancelled.
@@ -1403,6 +1416,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     if (ringing) {
       finishRing('dismiss');
+      return;
+    }
+    if (isMenuOpen) {
+      setIsMenuOpen(false);
       return;
     }
     if (closeDiaryModalRef.current) {
@@ -1462,8 +1479,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
       setActiveAlert(null);
       return;
     }
-    if (activeTab !== 'today') {
-      setActiveTab('today');
+    if (activeTab !== 'home') {
+      setActiveTab('home');
       return;
     }
     // At the root screen: behave like a normal Android app and background it.
@@ -2620,6 +2637,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
   };
 
   const handleQuickAdd = () => {
+    // Home is about today: don't add to a date that was left picked on the Today tab.
+    if (activeTab === 'home') setSelectedDate(todayStr);
     if (activeTab === 'diary') {
       openDiaryComposer(selectedDate);
     } else if (activeTab === 'today' || activeTab === 'finance') {
@@ -3025,6 +3044,45 @@ export default function App({ skipInitialLock = false }: AppProps) {
   );
   const dayProgress = useMemo(() => dailyProgress(progressInput, selectedDate, todayStr), [progressInput, selectedDate, todayStr]);
   const weekProgress = useMemo(() => weeklyConsistency(progressInput, todayStr), [progressInput, todayStr]);
+  // Home always describes today, whatever date the Today tab has picked.
+  const homeProgress = useMemo(
+    () => (selectedDate === todayStr ? dayProgress : dailyProgress(progressInput, todayStr, todayStr)),
+    [selectedDate, todayStr, dayProgress, progressInput],
+  );
+  // Android-only nudge when reminders may arrive late; shown on Home (the launch screen) and Today.
+  const reminderReliabilityCard =
+    isNativeAndroid() && !reminderNoticeDismissed ? (
+      <ReminderReliabilityCard
+        state={
+          nativeSetup
+            ? {
+                permissionGranted: nativeSetup.granted,
+                exactAlarm: nativeSetup.exactAlarm,
+              }
+            : null
+        }
+        onRequestPermission={() => void handleRequestPermission()}
+        onOpenExactAlarmSettings={handleOpenExactAlarmSettings}
+        onDismiss={dismissReminderNotice}
+      />
+    ) : null;
+  const homeData = useMemo(
+    () =>
+      activeTab === 'home'
+        ? homeSummary({
+            today: todayStr,
+            tasks,
+            habits,
+            checkIns: habitCheckIns,
+            goals,
+            transactions,
+            budgets,
+            billPayments,
+            diaryEntries,
+          })
+        : null,
+    [activeTab, todayStr, tasks, habits, habitCheckIns, goals, transactions, budgets, billPayments, diaryEntries],
+  );
 
   // Weekly report: due for this week on Sunday, otherwise for the week just ended.
   const weeklyInput = useMemo(
@@ -3109,6 +3167,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
         onToggleTheme={handleToggleTheme}
         onRequestPermission={handleRequestPermission}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenMenu={openMenu}
+        isMenuOpen={isMenuOpen}
       />
 
       <InstallPrompt />
@@ -3149,6 +3209,34 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
       {/* Main Content Area */}
       <main className="max-w-5xl lg:max-w-6xl mx-auto px-4 py-5 lg:pl-6 lg:pr-8">
+        {activeTab === 'maintenance' && (
+          <Suspense fallback={<p role="status">Loading maintenance…</p>}>
+            <MaintenanceView />
+          </Suspense>
+        )}
+        {activeTab === 'vault' && !appLocked && !ringing && (
+          <Suspense fallback={<p role="status">Loading vault…</p>}>
+            <PasswordVaultView />
+          </Suspense>
+        )}
+        {/* HOME DASHBOARD */}
+        {activeTab === 'home' && homeData && (
+          <div className="space-y-4">
+            {reminderReliabilityCard}
+            {showReportCard && <WeeklyReportCard weekStart={dueReportWeek} onOpen={() => openWeeklyReport()} />}
+            <HomeView
+              summary={homeData}
+              progress={homeProgress}
+              weekly={weekProgress}
+              alarms={alarms}
+              onOpen={(tab) => {
+                // Home describes today, so whatever it opens (Today, Diary, ...) starts on today too.
+                setSelectedDate(todayStr);
+                setActiveTab(tab);
+              }}
+            />
+          </div>
+        )}
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
@@ -3308,21 +3396,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
             )}
 
             {/* Native reminder reliability nudge (Android only, dismissible) */}
-            {isNativeAndroid() && !reminderNoticeDismissed && (
-              <ReminderReliabilityCard
-                state={
-                  nativeSetup
-                    ? {
-                        permissionGranted: nativeSetup.granted,
-                        exactAlarm: nativeSetup.exactAlarm,
-                      }
-                    : null
-                }
-                onRequestPermission={() => void handleRequestPermission()}
-                onOpenExactAlarmSettings={handleOpenExactAlarmSettings}
-                onDismiss={dismissReminderNotice}
-              />
-            )}
+            {reminderReliabilityCard}
 
             {selectedDate === localToday && (
               <DailyPlanCard
@@ -3629,12 +3703,21 @@ export default function App({ skipInitialLock = false }: AppProps) {
         onOpenQuickAdd={handleQuickAdd}
       />
 
+      {/* Mobile sidebar drawer (header menu button or left-edge swipe) */}
+      <MobileSidebar
+        isOpen={isMenuOpen}
+        activeTab={activeTab}
+        onOpen={openMenu}
+        onClose={closeMenu}
+        onChangeTab={setActiveTab}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
+
       {/* Bottom Mobile Nav */}
       <BottomNav
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         onOpenQuickAdd={handleQuickAdd}
-        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <DiaryEntryModal

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, BellOff, Volume2, Settings, ShieldAlert, Sun, Moon } from 'lucide-react';
+import { Bell, BellOff, Volume2, Settings, ShieldAlert, Sun, Moon, Menu } from 'lucide-react';
 import { NotificationSettings } from '../types';
 import { audioService } from '../services/audioService';
 
@@ -10,6 +10,9 @@ interface HeaderProps {
   onToggleTheme: () => void;
   onRequestPermission: () => void;
   onOpenSettings: () => void;
+  /** Opens the mobile sidebar drawer. */
+  onOpenMenu: () => void;
+  isMenuOpen: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,6 +22,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleTheme,
   onRequestPermission,
   onOpenSettings,
+  onOpenMenu,
+  isMenuOpen,
 }) => {
   const todayFormatted = new Date().toLocaleDateString('en-US', {
     weekday: 'short',
@@ -35,6 +40,16 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-5xl lg:max-w-6xl mx-auto flex items-center justify-between gap-2">
         {/* Brand & Date - the sidebar already shows these on desktop */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 lg:hidden">
+          <button
+            type="button"
+            onClick={onOpenMenu}
+            aria-label="Open menu"
+            aria-controls="mobile-sidebar"
+            aria-expanded={isMenuOpen}
+            className="-ml-1.5 min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 shrink-0"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20 shrink-0">
             <span className="font-bold text-lg leading-none">✓</span>
           </div>

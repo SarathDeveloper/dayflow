@@ -10,6 +10,7 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
 import type { Goal, Habit, HabitCheckIn, NotificationSettings, SoundType, Task } from '../types';
 import { buildReminderPlans } from '../lib/reminders';
+import type { ExtraReminderPlan } from '../lib/extraReminders';
 import { isNativeAndroid } from '../lib/platform';
 
 export type NativePermission = 'granted' | 'denied' | 'prompt' | 'unsupported';
@@ -30,6 +31,9 @@ export interface ReminderSyncResult {
 const CHANNEL_PREFIX = 'reminders_';
 const SILENT_CHANNEL = 'reminders_silent';
 const GROUP_KEY = 'daily-task-reminders';
+/** Document and maintenance reminders: chime channel, own group so they do not bundle with tasks. */
+const EXTRA_CHANNEL = 'reminders_chime';
+const EXTRA_GROUP_KEY = 'dayflow-extra-reminders';
 const SMALL_ICON = 'ic_stat_icon';
 const ICON_COLOR = '#4f46e5';
 
@@ -146,11 +150,76 @@ function pendingToMs(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/** Task and habit reminders own ids >= 0; document and maintenance reminders own ids < 0. */
+function isTaskReminderId(id: number): boolean {
+  return id >= 0;
+}
+
+function isExtraReminderId(id: number): boolean {
+  return id < 0;
+}
+
+/** The minimal view of a pending notification the reconcile step needs. */
+export interface PendingNotificationInfo {
+  id: number;
+  schedule?: { at?: unknown };
+}
+
+/**
+ * Pure reconcile step shared by the task and the extra-reminder sync.
+ *
+ * Only pending notifications whose id passes `owns` are considered, so each sync
+ * leaves the other's alarms alone. A pending entry that is not desired is
+ * cancelled unless its time is already past (`getPending()` keeps records of
+ * notifications that already fired; cancelling those is wasted IPC). A desired
+ * plan is (re)scheduled when nothing is pending for its id or the pending time
+ * differs by more than 1 second.
+ */
+export function planNotificationReconcile<P extends { notificationId: number; fireAt: Date }>(
+  pending: readonly PendingNotificationInfo[],
+  plans: readonly P[],
+  nowMs: number,
+  owns: (id: number) => boolean
+): { toCancel: { id: number }[]; toSchedule: P[] } {
+  const desired = new Map(plans.map((plan) => [plan.notificationId, plan]));
+  const owned = pending.filter((notification) => owns(notification.id));
+  const pendingById = new Map(owned.map((notification) => [notification.id, notification]));
+
+  const toCancel: { id: number }[] = [];
+  const cancelled = new Set<number>();
+  for (const notification of owned) {
+    const plan = desired.get(notification.id);
+    const pendingAt = pendingToMs(notification.schedule?.at);
+    if (!plan) {
+      if (pendingAt && pendingAt < nowMs) continue;
+      toCancel.push({ id: notification.id });
+      cancelled.add(notification.id);
+      continue;
+    }
+    if (pendingAt && Math.abs(pendingAt - plan.fireAt.getTime()) > 1000) {
+      toCancel.push({ id: notification.id });
+      cancelled.add(notification.id);
+    }
+  }
+
+  const toSchedule = plans.filter((plan) => {
+    const alreadyPending = pendingById.get(plan.notificationId);
+    if (!alreadyPending) return true;
+    if (cancelled.has(plan.notificationId)) return true;
+    const pendingAt = pendingToMs(alreadyPending.schedule?.at);
+    return pendingAt === 0 || Math.abs(pendingAt - plan.fireAt.getTime()) > 1000;
+  });
+
+  return { toCancel, toSchedule };
+}
+
 /**
  * Reconcile the phone's pending alarms with the desired reminder list.
  *
  * The entire schedule is derived from the task list, so a completed, edited or
  * deleted task simply stops producing a plan and its stale alarm is cancelled.
+ * Document and maintenance reminders (ids < 0) are never touched here; see
+ * `syncExtraReminders`.
  */
 export async function syncScheduledNotifications(
   tasks: Task[],
@@ -166,32 +235,16 @@ export async function syncScheduledNotifications(
 
   try {
     const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals, songIds).filter(
-      (plan) => !plan.ring
+      (plan) => !plan.ring && isTaskReminderId(plan.notificationId)
     );
-    const desired = new Map(plans.map((plan) => [plan.notificationId, plan]));
-    const now = Date.now();
 
     const pending = await LocalNotifications.getPending();
-    const pendingById = new Map(
-      pending.notifications.map((notification) => [notification.id, notification])
+    const { toCancel, toSchedule } = planNotificationReconcile(
+      pending.notifications,
+      plans,
+      Date.now(),
+      isTaskReminderId
     );
-
-    const toCancel: { id: number }[] = [];
-    for (const notification of pending.notifications) {
-      const plan = desired.get(notification.id);
-      const pendingAt = pendingToMs(notification.schedule?.at);
-      if (!plan) {
-        // `getPending()` also returns records for notifications that already
-        // fired (the plugin keeps them for history). Those need no work, and
-        // cancelling them again on every sync would be wasted IPC.
-        if (pendingAt && pendingAt < now) continue;
-        toCancel.push({ id: notification.id });
-        continue;
-      }
-      if (pendingAt && Math.abs(pendingAt - plan.fireAt.getTime()) > 1000) {
-        toCancel.push({ id: notification.id });
-      }
-    }
 
     if (toCancel.length > 0) {
       await LocalNotifications.cancel({ notifications: toCancel });
@@ -203,14 +256,6 @@ export async function syncScheduledNotifications(
     // plugin open the "Alarms & reminders" system screen on every resync, which
     // would yank the user out of the app; inexact is good enough as a fallback.
     const exactAllowed = exactStatus === 'granted';
-
-    const toSchedule = plans.filter((plan) => {
-      const alreadyPending = pendingById.get(plan.notificationId);
-      if (!alreadyPending) return true;
-      if (toCancel.some((entry) => entry.id === plan.notificationId)) return true;
-      const pendingAt = pendingToMs(alreadyPending.schedule?.at);
-      return pendingAt === 0 || Math.abs(pendingAt - plan.fireAt.getTime()) > 1000;
-    });
 
     if (toSchedule.length > 0) {
       await LocalNotifications.schedule({
@@ -245,18 +290,103 @@ export async function syncScheduledNotifications(
   }
 }
 
-/** Wipes every alarm this app scheduled (used when reminders are turned off). */
-export async function cancelAllTaskReminders(): Promise<void> {
+/**
+ * Reconcile document-expiry and maintenance reminders (built by
+ * `buildExtraReminderPlans`) with the phone's pending alarms.
+ *
+ * Only ids < 0 are touched, so task and habit alarms are left alone. With the
+ * permission denied nothing is scheduled (the screens then explain that
+ * reminders only show inside the app). Plans with a non-negative or duplicate
+ * id, or an invalid time, are dropped instead of risking a task's alarm slot.
+ */
+export async function syncExtraReminders(
+  plans: ExtraReminderPlan[],
+  options: { granted: boolean }
+): Promise<ReminderSyncResult> {
+  if (!isNativeAndroid()) return { scheduled: 0, cancelled: 0, skipped: true };
+  if (!options.granted) return { scheduled: 0, cancelled: 0, skipped: true };
+
+  try {
+    const seen = new Set<number>();
+    const valid = plans.filter((plan) => {
+      if (!Number.isInteger(plan.notificationId) || !isExtraReminderId(plan.notificationId)) return false;
+      if (!(plan.fireAt instanceof Date) || !Number.isFinite(plan.fireAt.getTime())) return false;
+      if (seen.has(plan.notificationId)) return false;
+      seen.add(plan.notificationId);
+      return true;
+    });
+
+    const pending = await LocalNotifications.getPending();
+    const { toCancel, toSchedule } = planNotificationReconcile(
+      pending.notifications,
+      valid,
+      Date.now(),
+      isExtraReminderId
+    );
+
+    if (toCancel.length > 0) {
+      await LocalNotifications.cancel({ notifications: toCancel });
+    }
+
+    const exactAllowed = (await checkExactAlarmSetting()) === 'granted';
+
+    if (toSchedule.length > 0) {
+      await LocalNotifications.schedule({
+        notifications: toSchedule.map((plan) => ({
+          id: plan.notificationId,
+          title: plan.title,
+          body: plan.body,
+          schedule: {
+            at: plan.fireAt,
+            allowWhileIdle: true,
+          },
+          isExactNotification: exactAllowed,
+          isExactMandatory: false,
+          channelId: EXTRA_CHANNEL,
+          smallIcon: SMALL_ICON,
+          iconColor: ICON_COLOR,
+          autoCancel: true,
+          foreground: true,
+          group: EXTRA_GROUP_KEY,
+          extra: { taskId: plan.route },
+        })),
+      });
+    }
+
+    return { scheduled: toSchedule.length, cancelled: toCancel.length, skipped: false };
+  } catch (e) {
+    console.warn('Failed to sync document and maintenance reminders:', e);
+    return { scheduled: 0, cancelled: 0, skipped: false };
+  }
+}
+
+/** Cancels every pending alarm with an id in `owns`. */
+async function cancelPendingWhere(owns: (id: number) => boolean, what: string): Promise<void> {
   if (!isNativeAndroid()) return;
   try {
     const pending = await LocalNotifications.getPending();
-    if (pending.notifications.length === 0) return;
+    const ids = pending.notifications.filter((notification) => owns(notification.id));
+    if (ids.length === 0) return;
     await LocalNotifications.cancel({
-      notifications: pending.notifications.map((notification) => ({ id: notification.id })),
+      notifications: ids.map((notification) => ({ id: notification.id })),
     });
   } catch (e) {
-    console.warn('Failed to cancel reminders:', e);
+    console.warn(`Failed to cancel ${what}:`, e);
   }
+}
+
+/**
+ * Wipes every task and habit alarm this app scheduled (used when reminders are
+ * turned off). Document and maintenance reminders (ids < 0) are kept; use
+ * `cancelAllExtraReminders` for those.
+ */
+export async function cancelAllTaskReminders(): Promise<void> {
+  await cancelPendingWhere(isTaskReminderId, 'reminders');
+}
+
+/** Wipes every pending document and maintenance reminder (ids < 0). */
+export async function cancelAllExtraReminders(): Promise<void> {
+  await cancelPendingWhere(isExtraReminderId, 'document and maintenance reminders');
 }
 
 export interface ReminderListenerHandlers {

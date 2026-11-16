@@ -61,31 +61,32 @@ export const AlarmSongsSection: React.FC = () => {
   };
 
   return (
-    <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
-          <Music className="w-3.5 h-3.5 text-indigo-500" />
-          <span>Alarm songs</span>
-        </div>
+    <section aria-labelledby="settings-alarm-songs" className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id="settings-alarm-songs" className="flex items-center gap-2 text-sm font-semibold">
+          <Music aria-hidden="true" className="size-4 text-indigo-500" />
+          Alarm songs
+        </h3>
         <button
           type="button"
           onClick={add}
           disabled={adding || songs.length >= MAX_SONGS}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 font-semibold disabled:opacity-50"
+          className="flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2.5 font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
         >
           <Plus className="w-3.5 h-3.5" />
           {adding ? 'Adding…' : 'Add songs'}
         </button>
       </div>
-      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-        Pick songs from your {isNativeAndroid() ? 'phone' : 'device'}, then choose one for any task, habit or alarm set to
-        Local music. Up to {MAX_SONGS} songs, 15 MB each. Songs stay on this device and are not synced or backed up.
-        {!isNativeAndroid() && ' On the website, alarms ring only while Dayflow is open.'}
+      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+        {ready && songs.length === 0 ? 'Add a song to use it as an alarm.' : 'Choose Local music to use a song for a task, habit, or alarm.'}
       </p>
-
-      {ready && songs.length === 0 && (
-        <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">No songs yet.</p>
-      )}
+      <details className="text-xs text-slate-600 dark:text-slate-400">
+        <summary className="w-fit cursor-pointer rounded py-1 font-medium text-indigo-700 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-indigo-300">Song limits and storage</summary>
+        <p className="mt-2 leading-relaxed">
+          Add up to {MAX_SONGS} songs, 15 MB each. Songs stay on this device and are not synced or backed up.
+          {!isNativeAndroid() && ' On the website, alarms ring only while Dayflow is open.'}
+        </p>
+      </details>
 
       {songs.length > 0 && (
         <ul className="divide-y divide-slate-200 dark:divide-slate-800 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
@@ -116,6 +117,6 @@ export const AlarmSongsSection: React.FC = () => {
         </ul>
       )}
       {note && <p className="text-[11px] text-slate-600 dark:text-slate-300">{note}</p>}
-    </div>
+    </section>
   );
 };

@@ -1,8 +1,9 @@
 import React from 'react';
 import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar, Repeat, CalendarRange } from 'lucide-react';
 import { Goal, Habit, HabitCheckIn, Task } from '../types';
-import { habitCompletion, habitStreak, todayDateString, weekStartMonday } from '../lib/habits';
+import { habitCompletion, todayDateString, weekStartMonday } from '../lib/habits';
 import { todayString } from '../lib/ledger';
+import { bestHabitStreak, streakHabits, taskStreak } from '../lib/homeSummary';
 
 interface StatsViewProps {
   tasks: Task[];
@@ -25,60 +26,17 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, g
     0
   );
 
-  // Calculate streak (consecutive days with completed tasks)
-  const calculateStreak = (): number => {
-    const dates = Array.from(new Set(completedTasks.map((t) => t.date))).sort().reverse();
-    if (dates.length === 0) return 0;
-
-    let streak = 0;
-    const todayStr = todayString();
-    let checkDate = new Date();
-
-    // Check if today or yesterday has a completed task
-    if (!dates.includes(todayStr)) {
-      checkDate.setDate(checkDate.getDate() - 1);
-      const yesterdayStr = todayString(checkDate);
-      if (!dates.includes(yesterdayStr)) {
-        return 0;
-      }
-    }
-
-    while (true) {
-      const dStr = todayString(checkDate);
-      if (dates.includes(dStr)) {
-        streak++;
-        checkDate.setDate(checkDate.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-
-    return streak;
-  };
-
-  const streakDays = calculateStreak();
+  const streakDays = taskStreak(tasks, todayString());
   const today = todayDateString();
   const weekStart = weekStartMonday(today);
-  const activeHabits = habits.filter((habit) => {
-    if (habit.archived) return false;
-    if (!habit.goalId) return true;
-    const goal = goals.find((item) => item.id === habit.goalId);
-    return !goal || goal.status !== 'paused';
-  });
   let habitScheduled = 0;
   let habitDone = 0;
-  let bestHabitStreak = 0;
-  let bestHabitUnit = 'days';
-  for (const habit of activeHabits) {
+  for (const habit of streakHabits(habits, goals)) {
     const completion = habitCompletion(habit, checkIns, weekStart, today);
     habitScheduled += completion.scheduled;
     habitDone += completion.done;
-    const streak = habitStreak(habit, checkIns, today);
-    if (streak > bestHabitStreak) {
-      bestHabitStreak = streak;
-      bestHabitUnit = habit.schedule.type === 'times_per_week' ? 'weeks' : 'days';
-    }
   }
+  const { streak: bestHabitStreakDays, unit: bestHabitUnit } = bestHabitStreak(habits, goals, checkIns, today);
   const habitWeekRate = habitScheduled === 0 ? 0 : Math.round((habitDone / habitScheduled) * 100);
 
   // Weekly Completion Bar Chart Data (last 7 days)
@@ -177,7 +135,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, g
             <Flame className="w-5 h-5" />
           </div>
           <div className="mt-2">
-            <span className="text-3xl font-black text-slate-900 dark:text-white">{bestHabitStreak}</span>
+            <span className="text-3xl font-black text-slate-900 dark:text-white">{bestHabitStreakDays}</span>
             <span className="text-xs text-slate-500 dark:text-slate-400 block">{bestHabitUnit}</span>
           </div>
         </div>

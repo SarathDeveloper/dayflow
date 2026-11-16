@@ -13,7 +13,7 @@ type Mode = 'signin' | 'signup' | 'reset';
 export const MIN_PASSWORD_LENGTH = 8;
 
 /** Full-screen Sign in / Create account / Forgot password. The app opens once a session exists. */
-export const AuthScreen: React.FC = () => {
+export const AuthScreen: React.FC<{ onOpenVault?: () => void }> = ({ onOpenVault }) => {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -217,6 +217,12 @@ export const AuthScreen: React.FC = () => {
           <span>{mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send reset link'}</span>
         </Button>
       </form>
+
+      {mode === 'signin' && onOpenVault && (
+        <Button type="button" variant="secondary" disabled={busy} className="w-full" onClick={onOpenVault}>
+          Open Password Vault offline
+        </Button>
+      )}
 
       {mode === 'reset' && (
         <button
