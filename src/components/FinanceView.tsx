@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from '../lib/moneyLinks';
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   Wallet,
@@ -53,12 +54,13 @@ import { debtOutstanding } from '../lib/debtPlanner';
 import { forecastMonth } from '../lib/moneyForecast';
 import { QuickEntryBar } from './money/QuickEntryBar';
 import { SplitEntryModal } from './money/SplitEntryModal';
+import { BillPayModal } from './money/BillPayModal';
 import { MonthOutlook } from './money/MonthOutlook';
 import { MoneyReports } from './money/MoneyReports';
 import { DebtLoanPanel, DebtPayoffPlanner } from './money/DebtPlanner';
 import type { QuickEntry } from '../lib/quickEntry';
 import type { SplitLine } from '../lib/quickEntry';
-import { computeAccountBalances, todayString } from '../lib/ledger';
+import { computeAccountBalances, resolveDefaultAccountId, todayString } from '../lib/ledger';
 import {
   getDailySpendForMonth,
   getLast7DaysData,
@@ -133,7 +135,9 @@ interface FinanceViewProps {
   onQuickEntry: (entry: QuickEntry) => boolean;
   /** One payment split across categories. */
   onSplitEntry: (split: { accountId: string; date: string; note?: string; paymentMethod?: PaymentMethod; lines: SplitLine[] }) => boolean;
-  onAddDebtPayment: (id: string, amount: number, date: string) => void;
+  onAddDebtPayment: (id: string, amount: number, date: string, ledger?: { accountId: string }) => boolean;
+  /** Pays a bill with the chosen amount, account and date (a linked ledger entry). */
+  onPayBill: (payment: BillPayment, details: { amount: number; accountId: string; date: string; paymentMethod?: PaymentMethod }) => boolean;
 }
 
 type FinanceMode = 'ledger' | 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings' | 'reports';
@@ -220,9 +224,11 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onQuickEntry,
   onSplitEntry,
   onAddDebtPayment,
+  onPayBill,
 }) => {
   const [mode, setMode] = useState<FinanceMode>('ledger');
   const [isSplitOpen, setIsSplitOpen] = useState(false);
+  const [payingBill, setPayingBill] = useState<BillPayment | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => toMonthKey(selectedDate));
   const [budgetInput, setBudgetInput] = useState('');
   const [isEditingBudget, setIsEditingBudget] = useState(false);
@@ -262,10 +268,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   );
 
   const dailyExpense = dailyTx
-    .filter((t) => t.type === 'expense')
+    .filter((t) => countsAsSpending(t))
     .reduce((s, t) => s + t.amount, 0);
   const dailyIncome = dailyTx
-    .filter((t) => t.type === 'income')
+    .filter((t) => countsAsIncome(t))
     .reduce((s, t) => s + t.amount, 0);
 
   const monthlyTx = useMemo(
@@ -277,17 +283,17 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   );
 
   const monthlyExpense = monthlyTx
-    .filter((t) => t.type === 'expense')
+    .filter((t) => countsAsSpending(t))
     .reduce((s, t) => s + t.amount, 0);
   const monthlyIncome = monthlyTx
-    .filter((t) => t.type === 'income')
+    .filter((t) => countsAsIncome(t))
     .reduce((s, t) => s + t.amount, 0);
   const monthlyNet = monthlyIncome - monthlyExpense;
 
   const categoryBreakdown = useMemo(() => {
     const map = new Map<string, number>();
     monthlyTx
-      .filter((t) => t.type === 'expense')
+      .filter((t) => countsAsSpending(t))
       .forEach((t) => map.set(t.category, (map.get(t.category) || 0) + t.amount));
     return Array.from(map.entries())
       .map(([category, amount]) => ({ category, amount }))
@@ -338,6 +344,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     () => ledger.accounts.filter((account) => !account.isArchived),
     [ledger.accounts]
   );
+  const defaultAccountId = resolveDefaultAccountId(ledger.accounts, ledger.ledgerSettings[0]) ?? undefined;
 
   // The current month, whatever month the views are showing.
   const outlookToday = todayString();
@@ -606,6 +613,15 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       {spendableAccounts.length > 0 && (mode === 'ledger' || mode === 'daily' || mode === 'monthly') && (
         <MonthOutlook forecast={forecast} />
       )}
+      <BillPayModal
+        payment={payingBill}
+        template={payingBill ? billTemplates.find((bill) => bill.id === payingBill.billId) : undefined}
+        accounts={spendableAccounts}
+        defaultAccountId={defaultAccountId}
+        today={outlookToday}
+        onClose={() => setPayingBill(null)}
+        onPay={onPayBill}
+      />
       <SplitEntryModal
         isOpen={isSplitOpen}
         accounts={spendableAccounts}
@@ -1734,7 +1750,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                         }`}
                       >
                         <button
-                          onClick={() => onToggleBillPaid(payment)}
+                          aria-label={payment.paid ? 'Mark unpaid' : 'Pay this bill'}
+                          onClick={() => (payment.paid ? onToggleBillPaid(payment) : setPayingBill(payment))}
                           className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border-2 transition-colors ${
                             payment.paid
                               ? 'bg-emerald-500 border-emerald-500 text-white'
@@ -2274,7 +2291,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                     onDelete={onDeleteDebt}
                     onTogglePaid={onToggleDebtPaid}
                   />
-                  <DebtLoanPanel debt={debt} today={today} onAddPayment={onAddDebtPayment} />
+                  <DebtLoanPanel debt={debt} today={today} accounts={spendableAccounts}
+                    defaultAccountId={defaultAccountId} onAddPayment={onAddDebtPayment} />
                 </div>
               ))}
             </div>

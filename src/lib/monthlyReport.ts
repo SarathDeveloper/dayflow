@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 import type { Account, FinanceTransaction } from '../types';
 import { monthLabelFromKey } from './dateFormat';
 import { shiftMonthKey } from './ledger';
@@ -47,8 +48,8 @@ function totals(transactions: FinanceTransaction[], month: string) {
     if (!tx.date?.startsWith(month)) continue;
     monthTx.push(tx);
     const paise = toPaise(tx.amount);
-    if (tx.type === 'income') incomePaise += paise;
-    if (tx.type !== 'expense') continue;
+    if (countsAsIncome(tx)) incomePaise += paise;
+    if (!countsAsSpending(tx)) continue;
     expensePaise += paise;
     const category = tx.category || 'Other';
     byCategory.set(category, (byCategory.get(category) ?? 0) + paise);
@@ -85,7 +86,7 @@ export function buildMonthlyReport(
     .sort((a, b) => b.amount - a.amount);
 
   const topSpends = current.monthTx
-    .filter((tx) => tx.type === 'expense')
+    .filter((tx) => countsAsSpending(tx))
     .sort((a, b) => b.amount - a.amount || a.date.localeCompare(b.date))
     .slice(0, 5);
 

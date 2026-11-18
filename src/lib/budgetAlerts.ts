@@ -1,3 +1,4 @@
+import { countsAsSpending } from './moneyLinks';
 import type {
   BudgetAlert,
   BudgetAlertState,
@@ -31,7 +32,7 @@ export function checkBudgetAlerts(args: {
   const monthlyBudget = budgets.find((b) => b.month === month);
   if (monthlyBudget && monthlyBudget.limit > 0) {
     const spent = monthTx
-      .filter((t) => t.type === 'expense')
+      .filter((t) => countsAsSpending(t))
       .reduce(addRupees, 0);
     const pct = (spent / monthlyBudget.limit) * 100;
     const key = month;
@@ -71,7 +72,7 @@ export function checkBudgetAlerts(args: {
   for (const cb of categoryBudgets.filter((b) => b.month === month)) {
     if (cb.limit <= 0) continue;
     const spent = monthTx
-      .filter((t) => t.type === 'expense' && t.category === cb.category)
+      .filter((t) => countsAsSpending(t) && t.category === cb.category)
       .reduce(addRupees, 0);
     const pct = (spent / cb.limit) * 100;
     const key = `${month}-${cb.category}`;

@@ -1,3 +1,4 @@
+import { countsAsSpending } from './moneyLinks';
 import type { FinanceTransaction, MonthlyBudget, Task } from '../types';
 import { fromPaise, toPaise } from './money';
 
@@ -30,7 +31,7 @@ export function buildWidgetSnapshot(
   let todayPaise = 0;
   let monthPaise = 0;
   for (const tx of transactions) {
-    if (tx.type !== 'expense' || !tx.date?.startsWith(month)) continue;
+    if (!countsAsSpending(tx) || !tx.date?.startsWith(month)) continue;
     const paise = toPaise(tx.amount);
     monthPaise += paise;
     if (tx.date === today) todayPaise += paise;

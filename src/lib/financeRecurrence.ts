@@ -1,3 +1,4 @@
+import { countsAsSpending } from './moneyLinks';
 import type { FinanceTransaction, FinanceRecurrenceType } from '../types';
 import { todayString } from './ledger';
 
@@ -134,7 +135,7 @@ export function recentExpenseCategories(
 ): string[] {
   const seen = new Set<string>();
   const sorted = [...transactions]
-    .filter((t) => t.type === 'expense')
+    .filter((t) => countsAsSpending(t))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   for (const tx of sorted) {
     if (!seen.has(tx.category)) seen.add(tx.category);

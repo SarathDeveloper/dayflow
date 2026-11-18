@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ChevronDown, Landmark, Target } from 'lucide-react';
-import type { Debt } from '../../types';
+import type { Account, Debt } from '../../types';
 import { debtOutstanding, emiSchedule, loanSummary, nextPayment, payoffPlan } from '../../lib/debtPlanner';
 import type { PayoffStrategy } from '../../lib/debtPlanner';
 import { evaluateAmount } from '../../lib/quickEntry';
@@ -15,16 +15,21 @@ const shortDate = (date: string) =>
 const field = 'bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
 
 /** Under each debt: progress, next payment, EMI details and schedule, and recording a part payment. */
-export function DebtLoanPanel({ debt, today, onAddPayment }: {
+export function DebtLoanPanel({ debt, today, accounts, defaultAccountId, onAddPayment }: {
   debt: Debt;
   today: string;
-  onAddPayment: (id: string, amount: number, date: string) => void;
+  /** Active accounts a payment can move through. */
+  accounts: Account[];
+  defaultAccountId?: string;
+  onAddPayment: (id: string, amount: number, date: string, ledger?: { accountId: string }) => boolean;
 }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [paying, setPaying] = useState(false);
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(today);
   const [error, setError] = useState('');
+  const [inLedger, setInLedger] = useState(accounts.length > 0);
+  const [accountId, setAccountId] = useState(debt.accountId ?? defaultAccountId ?? accounts[0]?.id ?? '');
   const outstanding = debtOutstanding(debt, today);
   const next = nextPayment(debt, today);
   const summary = loanSummary(debt, today);
@@ -49,7 +54,8 @@ export function DebtLoanPanel({ debt, today, onAddPayment }: {
       setError(`Only ${formatRupees(outstanding)} is left.`);
       return;
     }
-    onAddPayment(debt.id, value, date);
+    const saved = onAddPayment(debt.id, value, date, inLedger && accountId ? { accountId } : undefined);
+    if (!saved) return;
     setPaying(false);
     setAmount('');
     setError('');
@@ -104,8 +110,23 @@ export function DebtLoanPanel({ debt, today, onAddPayment }: {
             Date
             <input type="date" value={date} max={today} onChange={(event) => setDate(event.target.value)} className={`${field} mt-1 block`} />
           </label>
+          {accounts.length > 0 && (
+            <>
+              <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 min-h-9">
+                <input type="checkbox" checked={inLedger} onChange={(event) => setInLedger(event.target.checked)} className="w-4 h-4" />
+                {lent ? 'Into' : 'From'}
+              </label>
+              <select aria-label={lent ? 'Received into account' : 'Paid from account'} value={accountId} disabled={!inLedger}
+                onChange={(event) => setAccountId(event.target.value)} className={`${field} disabled:opacity-50`}>
+                {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+              </select>
+            </>
+          )}
           <Button type="submit" size="sm">Save</Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => { setPaying(false); setError(''); }}>Cancel</Button>
+          {accounts.length > 0 && !inLedger && (
+            <p className="w-full text-slate-500 dark:text-slate-400">Only the debt changes; no account balance moves.</p>
+          )}
           {error && <p role="alert" className="w-full text-rose-600 dark:text-rose-400">{error}</p>}
         </form>
       )}

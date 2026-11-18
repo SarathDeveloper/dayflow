@@ -11,6 +11,7 @@ import type { Account, FinanceTransaction } from '../../types';
 import { paymentMethodEmoji, paymentMethodLabel } from '../../data/financeCategories';
 import { formatPaise, toPaise } from '../../lib/money';
 import { accountDeltaPaise } from '../../lib/ledger';
+import { DEBT_FLOW_LABEL, isDebtPrincipal } from '../../lib/moneyLinks';
 import { formatClockTime, formatShortDate } from '../../lib/dateFormat';
 import { Card } from '../ui/Card';
 
@@ -111,8 +112,17 @@ export const LedgerTransactionRow: React.FC<LedgerTransactionRowProps> = ({
           onClick={() => onOpen?.(tx)}
           className="flex-1 min-w-0 text-left"
         >
-          <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
-            {headline}
+          <p className="text-sm font-bold text-slate-900 dark:text-white truncate flex items-center gap-1.5">
+            <span className="truncate">{headline}</span>
+            {tx.billPaymentId && (
+              <span className="shrink-0 rounded-full bg-sky-50 dark:bg-sky-950 px-1.5 py-0.5 text-[10px] font-bold text-sky-800 dark:text-sky-200">Bill</span>
+            )}
+            {tx.debtRole && !(tx.billPaymentId && tx.debtRole === 'emi') && (
+              <span title={isDebtPrincipal(tx) ? 'Not counted as income or spending' : undefined}
+                className="shrink-0 rounded-full bg-amber-50 dark:bg-amber-950 px-1.5 py-0.5 text-[10px] font-bold text-amber-900 dark:text-amber-100">
+                Debt · {DEBT_FLOW_LABEL[tx.debtRole]}
+              </span>
+            )}
           </p>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {metaParts.join(' · ') || (isTransfer ? 'Transfer' : tx.category)}

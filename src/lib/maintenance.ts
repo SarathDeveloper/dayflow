@@ -1,3 +1,4 @@
+import { countsAsSpending } from './moneyLinks';
 /**
  * Vehicle and home maintenance: a synced collection of recurring, date-based
  * tasks with a service history.
@@ -601,7 +602,7 @@ export function linkableTransactions(
     }
   }
   return transactions
-    .filter((tx) => tx.type === 'expense' && !taken.has(tx.id) && toPaise(tx.amount) > 0)
+    .filter((tx) => countsAsSpending(tx) && !taken.has(tx.id) && toPaise(tx.amount) > 0)
     .sort(
       (a, b) =>
         b.date.localeCompare(a.date) ||

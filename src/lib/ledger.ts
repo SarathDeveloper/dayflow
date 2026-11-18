@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 /**
  * Money ledger domain logic.
  *
@@ -657,7 +658,7 @@ function sortedGroups(map: Map<string, number>) {
 export function summarize(
   transactions: FinanceTransaction[],
   range: DateRange,
-  opts: { accountId?: string } = {}
+  opts: { accountId?: string; cashFlow?: boolean } = {}
 ): LedgerSummary {
   let income = 0;
   let expense = 0;
@@ -676,13 +677,13 @@ export function summarize(
       continue;
     }
     const paise = toPaise(tx.amount);
-    if (tx.type === 'income') {
+    if (opts.cashFlow ? tx.type === 'income' : countsAsIncome(tx)) {
       income += paise;
       incomeCount++;
       incomeCats.set(tx.category, (incomeCats.get(tx.category) || 0) + paise);
       const key = tx.accountId || 'unassigned';
       incomeAccounts.set(key, (incomeAccounts.get(key) || 0) + paise);
-    } else if (tx.type === 'expense') {
+    } else if (opts.cashFlow ? tx.type === 'expense' : countsAsSpending(tx)) {
       expense += paise;
       expenseCount++;
       expenseCats.set(tx.category, (expenseCats.get(tx.category) || 0) + paise);

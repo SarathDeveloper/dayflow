@@ -67,9 +67,14 @@ import {
   type EntryDraft,
   type TransferDraft,
 } from './lib/ledger';
-import { addRupees } from './lib/money';
+import { addRupees, formatRupees, fromPaise, toPaise } from './lib/money';
 import { debtOutstanding } from './lib/debtPlanner';
-import type { PaymentMethod } from './types';
+import {
+  addDebtPayment, debtOpeningDraft, debtPaymentDraft, debtTransactionIds, emiBillChanged, emiBillId, emiBillTemplate,
+  linkBillPayment, matchBillForExpense, relinkRestoredTransactions, reopenDebt, syncEditedTransaction,
+  unlinkDeletedTransactions,
+} from './lib/moneyLinks';
+import type { DebtPayment, PaymentMethod } from './types';
 import { NotificationBanner } from './components/NotificationBanner';
 import { SettingsModal } from './components/SettingsModal';
 import { BottomNav } from './components/BottomNav';
@@ -2373,25 +2378,31 @@ export default function App({ skipInitialLock = false }: AppProps) {
     const now = new Date();
     const nowIso = now.toISOString();
     if (partial.id) {
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === partial.id
-            ? {
-                ...t,
-                type: partial.type ?? t.type,
-                amount: partial.amount ?? t.amount,
-                category: partial.category ?? t.category,
-                note: partial.note,
-                date: partial.date ?? t.date,
-                time: partial.time ?? t.time,
-                paymentMethod: partial.paymentMethod ?? t.paymentMethod,
-                accountId: partial.accountId,
-                recurrence: partial.recurrence ?? t.recurrence,
-                updatedAt: nowIso,
-              }
-            : t
-        )
-      );
+      const original = transactions.find((t) => t.id === partial.id);
+      if (!original) return;
+      const updated: FinanceTransaction = {
+        ...original,
+        type: partial.type ?? original.type,
+        amount: partial.amount ?? original.amount,
+        category: partial.category ?? original.category,
+        note: partial.note,
+        date: partial.date ?? original.date,
+        time: partial.time ?? original.time,
+        paymentMethod: partial.paymentMethod ?? original.paymentMethod,
+        accountId: partial.accountId,
+        recurrence: partial.recurrence ?? original.recurrence,
+        updatedAt: nowIso,
+      };
+      setTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      // A bill payment or debt linked to this entry takes its new amount and date.
+      setBillPayments((prev) => {
+        const linked = syncEditedTransaction(updated, prev, [], nowIso);
+        return linked.changed ? linked.billPayments : prev;
+      });
+      setDebts((prev) => {
+        const linked = syncEditedTransaction(updated, [], prev, nowIso);
+        return linked.changed ? linked.debts : prev;
+      });
       return;
     }
 
@@ -2428,7 +2439,43 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
     const newTx = buildIncomeOrExpense(draft, { now });
     setTransactions((prev) => [newTx, ...prev]);
+    void offerBillMatch(newTx);
     return true;
+  };
+
+  /**
+   * A new expense that looks like an unpaid bill (name in the note, or same
+   * category and a close amount near the due date): ask, then link them so the
+   * bill is paid and not counted twice.
+   */
+  const offerBillMatch = async (tx: FinanceTransaction) => {
+    const match = matchBillForExpense(tx, billTemplates, billPayments);
+    if (!match) return;
+    const { payment, template } = match;
+    const due = new Date(`${payment.dueDate}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const ok = await showConfirm({
+      title: `Is this your ${template.name} bill?`,
+      message: `Marks ${template.name} (${formatRupees(payment.amount)}, due ${due}) as paid with this ${formatRupees(tx.amount)} entry.`,
+      confirmLabel: 'Yes, mark paid',
+      cancelLabel: 'No',
+    });
+    if (!ok) return;
+    const stamp = new Date().toISOString();
+    setBillPayments((prev) =>
+      prev.map((p) => (p.id === payment.id && !p.paid ? linkBillPayment(p, tx, stamp).payment : p))
+    );
+    setTransactions((prev) =>
+      prev.map((t) =>
+        t.id === tx.id
+          ? {
+              ...t,
+              billPaymentId: payment.id,
+              ...(template.debtId ? { debtId: template.debtId, debtRole: 'emi' as const } : {}),
+              updatedAt: stamp,
+            }
+          : t
+      )
+    );
   };
 
   const handleDeleteTransaction = async (id: string) => {
@@ -2444,6 +2491,17 @@ export default function App({ skipInitialLock = false }: AppProps) {
       : isRecurring
         ? { title: 'Delete this entry only?', message: 'The series keeps creating future entries.' }
         : { title: 'Delete this transaction?' };
+    const linkNote = tx.billPaymentId
+      ? 'The bill it paid is marked unpaid again.'
+      : tx.debtRole === 'repaid' || tx.debtRole === 'received'
+        ? 'The payment is taken off its debt too.'
+        : tx.debtRole === 'borrowed' || tx.debtRole === 'lent'
+          ? 'The debt stays, without this ledger entry.'
+          : '';
+    if (linkNote) {
+      const base = 'message' in question && question.message ? `${question.message} ` : '';
+      Object.assign(question, { message: `${base}${linkNote}` });
+    }
     if (!(await showConfirm({ ...question, tone: 'danger', confirmLabel: 'Delete' }))) return;
 
     // Recompute from the latest list: a sync may have changed it while the dialog was open.
@@ -2453,6 +2511,16 @@ export default function App({ skipInitialLock = false }: AppProps) {
     const removed = latest.filter((t) => removedIds.includes(t.id));
     markDeleted(storageKeys, removedIds);
     setTransactions((prev) => removeTransactionCascade(prev, id));
+    // A bill it paid becomes unpaid again; a debt payment it made is removed.
+    const stamp = new Date().toISOString();
+    setBillPayments((prev) => {
+      const linked = unlinkDeletedTransactions(removedIds, prev, [], stamp);
+      return linked.changed ? linked.billPayments : prev;
+    });
+    setDebts((prev) => {
+      const linked = unlinkDeletedTransactions(removedIds, [], prev, stamp);
+      return linked.changed ? linked.debts : prev;
+    });
     setRecentlyDeletedTransaction({ txs: removed });
     // Clear any pending undo toast to keep a single toast slot.
     setRecentlyDeleted(null);
@@ -2465,7 +2533,17 @@ export default function App({ skipInitialLock = false }: AppProps) {
       storageKeys,
       recentlyDeletedTransaction.txs.map((t) => t.id)
     );
-    setTransactions((prev) => upsertTransactions(prev, recentlyDeletedTransaction.txs));
+    const restored = recentlyDeletedTransaction.txs;
+    setTransactions((prev) => upsertTransactions(prev, restored));
+    const stamp = new Date().toISOString();
+    setBillPayments((prev) => {
+      const linked = relinkRestoredTransactions(restored, prev, [], stamp);
+      return linked.changed ? linked.billPayments : prev;
+    });
+    setDebts((prev) => {
+      const linked = relinkRestoredTransactions(restored, [], prev, stamp);
+      return linked.changed ? linked.debts : prev;
+    });
     setRecentlyDeletedTransaction(null);
   };
 
@@ -2779,58 +2857,142 @@ export default function App({ skipInitialLock = false }: AppProps) {
   };
 
   // Debt handlers
-  const handleSaveDebt = (partial: Partial<Debt>) => {
-    const now = new Date().toISOString();
-    if (partial.id) {
-      setDebts((prev) =>
-        prev.map((d) =>
-          d.id === partial.id
-            ? {
-                ...d,
-                direction: partial.direction ?? d.direction,
-                personName: partial.personName ?? d.personName,
-                amount: partial.amount ?? d.amount,
-                date: partial.date ?? d.date,
-                dueDate: partial.dueDate,
-                note: partial.note,
-                loan: partial.loan,
-                updatedAt: now,
-              }
-            : d
-        )
-      );
-    } else {
-      const newDebt: Debt = {
-        id: `debt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        direction: partial.direction || 'lent',
-        personName: partial.personName || 'Unknown',
-        amount: partial.amount || 0,
-        date: partial.date || selectedDate,
-        dueDate: partial.dueDate,
-        note: partial.note,
-        loan: partial.loan,
-        paid: false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      setDebts((prev) => [newDebt, ...prev]);
+  /** Ledger validation context for the current state. */
+  const ledgerContext = () => ({
+    accounts,
+    transactions,
+    settings: ledgerSettings[0] || { allowNegativeBalance: false },
+  });
+
+  /** A loan you owe gets (or updates) its monthly EMI bill; anything else has none. */
+  const syncEmiBill = (debt: Debt | null, removedDebtId?: string) => {
+    const id = emiBillId(debt?.id ?? removedDebtId ?? '');
+    const existing = billTemplates.find((bill) => bill.id === id);
+    const stamp = new Date().toISOString();
+    if (!debt) {
+      if (!existing) return;
+      markDeleted(storageKeys, [id]);
+      setBillTemplates((prev) => prev.filter((bill) => bill.id !== id));
+      return;
     }
+    const next = emiBillTemplate(debt, existing, stamp);
+    if (!next) {
+      if (existing?.active) {
+        setBillTemplates((prev) => prev.map((bill) => (bill.id === id ? { ...bill, active: false, updatedAt: stamp } : bill)));
+      }
+      return;
+    }
+    if (!emiBillChanged(next, existing)) return;
+    setBillTemplates((prev) => (prev.some((bill) => bill.id === id) ? prev.map((bill) => (bill.id === id ? next : bill)) : [...prev, next]));
   };
 
-  /** A part payment (or a loan prepayment). Fully paying it off marks the debt paid. */
-  const handleAddDebtPayment = (id: string, amount: number, date: string) => {
-    const now = new Date().toISOString();
-    setDebts((prev) =>
-      prev.map((d) => {
-        if (d.id !== id || !(amount > 0)) return d;
-        const next: Debt = {
-          ...d,
-          payments: [...(d.payments ?? []), { id: `dpay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, date, amount }],
-          updatedAt: now,
+  /**
+   * Saves a debt. With `ledger`, the money borrowed (in) or lent (out) is also
+   * a ledger entry in that account; an already-linked entry follows the edit.
+   * False (with an alert) when the account cannot cover it.
+   */
+  const handleSaveDebt = (
+    partial: Partial<Debt>,
+    ledger?: { accountId: string; paymentMethod?: PaymentMethod }
+  ): boolean => {
+    const now = new Date();
+    const stamp = now.toISOString();
+    const existing = partial.id ? debts.find((d) => d.id === partial.id) : undefined;
+    let debt: Debt = existing
+      ? {
+          ...existing,
+          direction: partial.direction ?? existing.direction,
+          personName: partial.personName ?? existing.personName,
+          amount: partial.amount ?? existing.amount,
+          date: partial.date ?? existing.date,
+          dueDate: partial.dueDate,
+          note: partial.note,
+          loan: partial.loan,
+          updatedAt: stamp,
+        }
+      : {
+          id: `debt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          direction: partial.direction || 'lent',
+          personName: partial.personName || 'Unknown',
+          amount: partial.amount || 0,
+          date: partial.date || selectedDate,
+          dueDate: partial.dueDate,
+          note: partial.note,
+          loan: partial.loan,
+          paid: false,
+          createdAt: stamp,
+          updatedAt: stamp,
         };
-        return debtOutstanding(next, date) <= 0 ? { ...next, paid: true, paidAt: now } : next;
-      })
-    );
+
+    const linked = debt.transactionId ? transactions.find((t) => t.id === debt.transactionId) : undefined;
+    let record: FinanceTransaction | null = null;
+    if (linked || ledger) {
+      const accountId = ledger?.accountId ?? linked?.accountId;
+      if (!accountId) return false;
+      const draft = debtOpeningDraft(debt, {
+        accountId,
+        paymentMethod: ledger?.paymentMethod ?? linked?.paymentMethod,
+        time: linked?.time ?? nowTimeString(),
+      });
+      const validation = validateEntry({ ...draft, id: linked?.id }, ledgerContext());
+      if (isLedgerError(validation)) {
+        void showAlert(ledgerErrorDialog(validation));
+        return false;
+      }
+      record = linked
+        ? {
+            ...linked,
+            type: draft.type,
+            amount: fromPaise(toPaise(draft.amount)),
+            category: draft.category,
+            note: draft.note,
+            date: draft.date,
+            accountId: draft.accountId,
+            paymentMethod: draft.paymentMethod,
+            debtId: debt.id,
+            debtRole: draft.debtRole,
+            updatedAt: stamp,
+          }
+        : { ...buildIncomeOrExpense(draft, { now }), debtId: debt.id, debtRole: draft.debtRole };
+      debt = { ...debt, transactionId: record.id, accountId };
+    }
+
+    if (record) setTransactions((prev) => upsertTransactions(prev, [record as FinanceTransaction]));
+    setDebts((prev) => (existing ? prev.map((d) => (d.id === debt.id ? debt : d)) : [debt, ...prev]));
+    syncEmiBill(debt);
+    return true;
+  };
+
+  /**
+   * A part payment (or loan prepayment). With `ledger`, the money also moves:
+   * out of the account when you repay, into it when you get money back.
+   */
+  const handleAddDebtPayment = (
+    id: string,
+    amount: number,
+    date: string,
+    ledger?: { accountId: string; paymentMethod?: PaymentMethod }
+  ): boolean => {
+    const debt = debts.find((d) => d.id === id);
+    if (!debt || !(amount > 0)) return false;
+    const now = new Date();
+    const stamp = now.toISOString();
+    const payment: DebtPayment = { id: `dpay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, date, amount };
+    if (ledger) {
+      const draft = debtPaymentDraft(debt, amount, date, { ...ledger, time: nowTimeString() });
+      const validation = validateEntry(draft, ledgerContext());
+      if (isLedgerError(validation)) {
+        void showAlert(ledgerErrorDialog(validation));
+        return false;
+      }
+      const tx = { ...buildIncomeOrExpense(draft, { now }), debtId: debt.id, debtRole: draft.debtRole };
+      payment.transactionId = tx.id;
+      setTransactions((prev) => [tx, ...prev]);
+    }
+    const next = addDebtPayment(debt, payment, stamp);
+    setDebts((prev) => prev.map((d) => (d.id === id ? next : d)));
+    if (next.paid !== debt.paid) syncEmiBill(next);
+    return true;
   };
 
   /** One line from the quick-add bar or a repeated entry: the same rules as the full form. */
@@ -2869,7 +3031,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       void showAlert(ledgerErrorDialog(validation));
       return false;
     }
-    setTransactions((prev) => [buildIncomeOrExpense(draft), ...prev]);
+    const tx = buildIncomeOrExpense(draft);
+    setTransactions((prev) => [tx, ...prev]);
+    void offerBillMatch(tx);
     return true;
   };
 
@@ -2917,23 +3081,80 @@ export default function App({ skipInitialLock = false }: AppProps) {
       confirmLabel: 'Delete',
     });
     if (!confirmed) return;
+    const linkedIds = debtTransactionIds(debt, transactionsRef.current);
+    const removeEntries = linkedIds.length > 0 && (await showConfirm({
+      title: `Also delete its ${linkedIds.length} ledger ${linkedIds.length === 1 ? 'entry' : 'entries'}?`,
+      message: 'Deleting them puts the money back in the account balances as if it never moved. Keep them if the money really moved.',
+      tone: 'danger',
+      confirmLabel: 'Delete entries',
+      cancelLabel: 'Keep entries',
+    }));
+    const stamp = new Date().toISOString();
+    if (removeEntries) {
+      const latest = transactionsRef.current;
+      const removedIds = [...new Set(linkedIds.flatMap((txId) => idsRemovedByCascade(latest, txId)))];
+      markDeleted(storageKeys, removedIds);
+      setTransactions((prev) => prev.filter((t) => !removedIds.includes(t.id)));
+    } else if (linkedIds.length > 0) {
+      // Kept entries stay borrowed / repaid money (not income or spending), just without the debt.
+      setTransactions((prev) => prev.map((t) => (linkedIds.includes(t.id) ? { ...t, debtId: undefined, updatedAt: stamp } : t)));
+    }
     markDeleted(storageKeys, [id]);
     setDebts((prev) => prev.filter((d) => d.id !== id));
+    syncEmiBill(null, id);
   };
 
-  const handleToggleDebtPaid = (id: string) => {
-    setDebts((prev) =>
-      prev.map((d) =>
-        d.id === id
-          ? {
-              ...d,
-              paid: !d.paid,
-              paidAt: !d.paid ? new Date().toISOString() : undefined,
-              updatedAt: new Date().toISOString(),
-            }
-          : d
-      )
-    );
+  /**
+   * Ticking "paid" on a debt linked to an account records the rest as a ledger
+   * entry (after asking); unticking removes that entry again.
+   */
+  const handleToggleDebtPaid = async (id: string) => {
+    const debt = debts.find((d) => d.id === id);
+    if (!debt) return;
+    const now = new Date();
+    const stamp = now.toISOString();
+    if (debt.paid) {
+      const { debt: reopened, removedTransactionIds } = reopenDebt(debt, stamp);
+      if (removedTransactionIds.length) {
+        const latest = transactionsRef.current;
+        const removedIds = [...new Set(removedTransactionIds.flatMap((txId) => idsRemovedByCascade(latest, txId)))];
+        markDeleted(storageKeys, removedIds);
+        setTransactions((prev) => prev.filter((t) => !removedIds.includes(t.id)));
+      }
+      setDebts((prev) => prev.map((d) => (d.id === id ? reopened : d)));
+      syncEmiBill(reopened);
+      return;
+    }
+    const today = todayString();
+    const left = debtOutstanding(debt, today);
+    const account = debt.accountId ? accounts.find((a) => a.id === debt.accountId && !a.isArchived) : undefined;
+    let next: Debt = { ...debt, paid: true, paidAt: stamp, updatedAt: stamp };
+    if (left > 0 && account) {
+      const owed = debt.direction === 'owed';
+      const ok = await showConfirm({
+        title: owed
+          ? `Record ${formatRupees(left)} repaid from ${account.name}?`
+          : `Record ${formatRupees(left)} received into ${account.name}?`,
+        message: 'It is added to the ledger and the debt is marked paid. Unticking it later removes the entry.',
+        confirmLabel: 'Record and mark paid',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return;
+      const draft = debtPaymentDraft(debt, left, today, { accountId: account.id, time: nowTimeString() });
+      const validation = validateEntry(draft, ledgerContext());
+      if (isLedgerError(validation)) {
+        void showAlert(ledgerErrorDialog(validation));
+        return;
+      }
+      const tx = { ...buildIncomeOrExpense(draft, { now }), debtId: debt.id, debtRole: draft.debtRole };
+      setTransactions((prev) => [tx, ...prev]);
+      next = {
+        ...next,
+        payments: [...(debt.payments ?? []), { id: `dpay-${Date.now()}`, date: today, amount: left, transactionId: tx.id, settles: true }],
+      };
+    }
+    setDebts((prev) => prev.map((d) => (d.id === id ? next : d)));
+    syncEmiBill(next);
   };
 
   const openDebtModal = (debt?: Debt | null) => {
@@ -3028,91 +3249,120 @@ export default function App({ skipInitialLock = false }: AppProps) {
     );
   };
 
-  const handleToggleBillPaid = (payment: BillPayment) => {
+  /**
+   * Pays a bill: a ledger expense from the chosen account on the chosen day,
+   * linked both ways. An EMI bill also counts on its loan (role `emi`).
+   */
+  const handlePayBill = (
+    payment: BillPayment,
+    details: { amount: number; accountId: string; date: string; paymentMethod?: PaymentMethod }
+  ): boolean => {
     const template = billTemplates.find((t) => t.id === payment.billId);
-    if (!payment.paid) {
-      // Marking as paid: create a finance transaction against the template's
-      // account (falling back to the default account).
-      const accountId =
-        template?.accountId || resolveDefaultAccountId(accounts, ledgerSettings[0]);
-      const account = accounts.find((a) => a.id === accountId);
-      const draft: EntryDraft = {
-        type: 'expense',
-        amount: payment.amount,
-        accountId,
-        category: template?.category || 'Other',
-        note: `${template?.name || 'Bill'} payment`,
-        paymentMethod:
-          template?.paymentMethod || (account?.type === 'cash' ? 'cash' : 'bank_transfer'),
-        date: payment.dueDate,
-        time: nowTimeString(),
-      };
-      const validation = validateEntry(draft, {
-        accounts,
-        transactions,
-        settings: ledgerSettings[0] || { allowNegativeBalance: false },
-      });
-      if (isLedgerError(validation)) {
-        void showAlert(ledgerErrorDialog(validation));
-        return;
-      }
-
-      const now = new Date().toISOString();
-      const newTx = buildIncomeOrExpense(draft);
-      setTransactions((prev) => [newTx, ...prev]);
-      setBillPayments((prev) =>
-        prev.map((p) =>
-          p.id === payment.id
-            ? {
-                ...p,
-                paid: true,
-                paidAt: now,
-                transactionId: newTx.id,
-                updatedAt: now,
-              }
-            : p
-        )
-      );
-    } else {
-      // Un-ticking: delete the linked transaction.
-      if (payment.transactionId) {
-        markDeleted(storageKeys, idsRemovedByCascade(transactions, payment.transactionId));
-        setTransactions((prev) => removeTransactionCascade(prev, payment.transactionId as string));
-      }
-      setBillPayments((prev) =>
-        prev.map((p) =>
-          p.id === payment.id
-            ? {
-                ...p,
-                paid: false,
-                paidAt: undefined,
-                transactionId: undefined,
-                updatedAt: new Date().toISOString(),
-              }
-            : p
-        )
-      );
+    const account = accounts.find((a) => a.id === details.accountId);
+    const draft: EntryDraft = {
+      type: 'expense',
+      amount: details.amount,
+      accountId: details.accountId,
+      category: template?.category || 'Other',
+      note: `${template?.name || 'Bill'} payment`,
+      paymentMethod:
+        details.paymentMethod || template?.paymentMethod || (account?.type === 'cash' ? 'cash' : 'bank_transfer'),
+      date: details.date,
+      time: nowTimeString(),
+    };
+    const validation = validateEntry(draft, ledgerContext());
+    if (isLedgerError(validation)) {
+      void showAlert(ledgerErrorDialog(validation));
+      return false;
     }
+    const now = new Date().toISOString();
+    const newTx: FinanceTransaction = {
+      ...buildIncomeOrExpense(draft),
+      billPaymentId: payment.id,
+      ...(template?.debtId ? { debtId: template.debtId, debtRole: 'emi' as const } : {}),
+    };
+    setTransactions((prev) => [newTx, ...prev]);
+    setBillPayments((prev) =>
+      prev.map((p) => (p.id === payment.id ? linkBillPayment(p, newTx, now).payment : p))
+    );
+    return true;
   };
 
-  const handleUpdateBillPaymentAmount = (payment: BillPayment, amount: number) => {
-    setBillPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? { ...p, amount, updatedAt: new Date().toISOString() }
-          : p
-      )
-    );
-    // If paid, also update the linked transaction amount.
-    if (payment.paid && payment.transactionId) {
+  /** Ticking pays with the bill's defaults; unticking asks whether to delete the linked entry. */
+  const handleToggleBillPaid = async (payment: BillPayment) => {
+    const template = billTemplates.find((t) => t.id === payment.billId);
+    if (!payment.paid) {
+      const accountId = template?.accountId || resolveDefaultAccountId(accounts, ledgerSettings[0]);
+      if (!accountId) {
+        setIsAccountModalOpen(true);
+        return;
+      }
+      handlePayBill(payment, { amount: payment.amount, accountId, date: todayString() });
+      return;
+    }
+    const linkedTx = payment.transactionId ? transactions.find((t) => t.id === payment.transactionId) : undefined;
+    let deleteEntry = false;
+    if (linkedTx) {
+      const choice = await showConfirm({
+        title: `Mark ${template?.name ?? 'this bill'} unpaid?`,
+        message: `Its ledger entry (${formatRupees(linkedTx.amount)} on ${linkedTx.date}) can be deleted too, or kept if the money really left.`,
+        tone: 'danger',
+        confirmLabel: 'Delete the entry too',
+        cancelLabel: 'Keep the entry',
+      });
+      deleteEntry = choice;
+    }
+    const stamp = new Date().toISOString();
+    if (linkedTx && deleteEntry) {
+      const removedIds = idsRemovedByCascade(transactionsRef.current, linkedTx.id);
+      markDeleted(storageKeys, removedIds);
+      setTransactions((prev) => removeTransactionCascade(prev, linkedTx.id));
+    } else if (linkedTx) {
       setTransactions((prev) =>
         prev.map((t) =>
-          t.id === payment.transactionId
-            ? { ...t, amount, updatedAt: new Date().toISOString() }
+          t.id === linkedTx.id
+            ? { ...t, billPaymentId: undefined, ...(t.debtRole === 'emi' ? { debtId: undefined, debtRole: undefined } : {}), updatedAt: stamp }
             : t
         )
       );
     }
+    setBillPayments((prev) =>
+      prev.map((p) =>
+        p.id === payment.id ? { ...p, paid: false, paidAt: undefined, transactionId: undefined, updatedAt: stamp } : p
+      )
+    );
+  };
+
+  const handleUpdateBillPaymentAmount = (payment: BillPayment, amount: number) => {
+    const rupees = fromPaise(toPaise(amount));
+    const stamp = new Date().toISOString();
+    // A paid bill's ledger entry changes too: check the account can cover it first.
+    if (payment.paid && payment.transactionId) {
+      const linkedTx = transactions.find((t) => t.id === payment.transactionId);
+      if (linkedTx && linkedTx.accountId) {
+        const validation = validateEntry(
+          {
+            id: linkedTx.id,
+            type: 'expense',
+            amount: rupees,
+            accountId: linkedTx.accountId,
+            category: linkedTx.category,
+            date: linkedTx.date,
+          },
+          ledgerContext()
+        );
+        if (isLedgerError(validation)) {
+          void showAlert(ledgerErrorDialog(validation));
+          return;
+        }
+        setTransactions((prev) =>
+          prev.map((t) => (t.id === payment.transactionId ? { ...t, amount: rupees, updatedAt: stamp } : t))
+        );
+      }
+    }
+    setBillPayments((prev) =>
+      prev.map((p) => (p.id === payment.id ? { ...p, amount: rupees, updatedAt: stamp } : p))
+    );
   };
 
   const openBillTemplateModal = (template?: BillTemplate | null) => {
@@ -3959,6 +4209,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onQuickEntry={handleQuickEntry}
             onSplitEntry={handleSplitEntry}
             onAddDebtPayment={handleAddDebtPayment}
+            onPayBill={handlePayBill}
           />
         )}
       </main>
@@ -4078,6 +4329,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
         onSave={handleSaveDebt}
         initialDebt={editingDebt}
         selectedDate={selectedDate}
+        accounts={accounts.filter((account) => !account.isArchived)}
+        defaultAccountId={resolveDefaultAccountId(accounts, ledgerSettings[0]) ?? undefined}
       />
 
       {/* Add / Edit Bill Template Modal */}

@@ -45,6 +45,13 @@ features, setup and the Android release process.
   its ATM fee goes too.
 - **Money is stored in rupees and calculated in paise.** Add amounts with
   `addRupees` / `toPaise` from `lib/money.ts`, never `a + b` on rupee floats.
+- **Borrowed / lent / repaid / received money is not income or spending.**
+  Such ledger entries carry `debtId` + `debtRole` (`lib/moneyLinks.ts`). Count
+  income and spending with `countsAsIncome` / `countsAsSpending`, never
+  `tx.type === 'expense'`; only the Ledger list itself shows raw cash flow
+  (`summarize(..., { cashFlow: true })`). Bills and debts link to their ledger
+  entries both ways (`billPaymentId` / `transactionId`); after deleting or
+  editing an entry, run `unlinkDeletedTransactions` / `syncEditedTransaction`.
 - **Dates are local, never UTC.** Use `todayString()` / `currentMonthKey()` from
   `lib/ledger.ts` for days and months. `toISOString()` is only for timestamps
   (`createdAt`, `updatedAt`, ...): east of UTC it is still yesterday after midnight.

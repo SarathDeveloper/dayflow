@@ -308,9 +308,17 @@ export interface FinanceTransaction {
   linkedTransferId?: string;
   recurrence: FinanceRecurrence;
   recurrenceGroupId?: string; // links generated instances in a series
+  /** The debt this money movement belongs to (borrowing, lending, repaying, an EMI). */
+  debtId?: string;
+  /** What it was for that debt. Borrowed / lent / repaid / received money is not income or spending. */
+  debtRole?: DebtFlowRole;
+  /** The bill payment this entry paid. */
+  billPaymentId?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export type DebtFlowRole = 'borrowed' | 'lent' | 'repaid' | 'received' | 'emi';
 
 export interface MonthlyBudget {
   id: string;
@@ -355,6 +363,10 @@ export interface Debt {
   loan?: DebtLoanTerms;
   /** Part payments so far (for a loan: prepayments on top of the EMIs). */
   payments?: DebtPayment[];
+  /** Account the money moved through (received into / paid from). */
+  accountId?: string;
+  /** Ledger entry for the money borrowed or lent, when recorded. */
+  transactionId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -371,6 +383,10 @@ export interface DebtPayment {
   id: string;
   date: string; // YYYY-MM-DD
   amount: number;
+  /** Ledger entry that moved this money, when recorded. */
+  transactionId?: string;
+  /** Made by ticking the debt paid (unticking removes it). */
+  settles?: boolean;
 }
 
 export interface SavingsGoal {
@@ -408,6 +424,11 @@ export interface BillTemplate {
   accountId?: string; // account the bill is paid from (optional)
   active: boolean; // false = paused
   note?: string;
+  /** A loan's EMI: the debt it repays. */
+  debtId?: string;
+  /** First and last month (YYYY-MM) the bill is due, when it is not open-ended. */
+  startMonth?: string;
+  endMonth?: string;
   createdAt: string;
   updatedAt: string;
 }

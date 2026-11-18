@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 import type { FinanceTransaction } from '../types';
 import { todayString } from './ledger';
 import { addRupees } from './money';
@@ -22,10 +23,10 @@ export function getLast7DaysData(transactions: FinanceTransaction[]): DayData[] 
     const dateStr = toISODate(d);
     const dayTx = transactions.filter((t) => t.date === dateStr);
     const expense = dayTx
-      .filter((t) => t.type === 'expense')
+      .filter((t) => countsAsSpending(t))
       .reduce(addRupees, 0);
     const income = dayTx
-      .filter((t) => t.type === 'income')
+      .filter((t) => countsAsIncome(t))
       .reduce(addRupees, 0);
     days.push({
       dateStr,
@@ -52,10 +53,10 @@ export function getPrev7DaysTotals(transactions: FinanceTransaction[]): {
     const dateStr = toISODate(d);
     const dayTx = transactions.filter((t) => t.date === dateStr);
     expense += dayTx
-      .filter((t) => t.type === 'expense')
+      .filter((t) => countsAsSpending(t))
       .reduce(addRupees, 0);
     income += dayTx
-      .filter((t) => t.type === 'income')
+      .filter((t) => countsAsIncome(t))
       .reduce(addRupees, 0);
   }
   return { expense, income };
@@ -80,7 +81,7 @@ export function getDailySpendForMonth(
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     const amount = transactions
-      .filter((t) => t.date === dateStr && t.type === 'expense')
+      .filter((t) => t.date === dateStr && countsAsSpending(t))
       .reduce(addRupees, 0);
     result.push({ date: dateStr, day, amount });
   }
@@ -112,10 +113,10 @@ export function getMonthOverMonthCompare(
   prevMonth: string
 ): MonthOverMonthCompare {
   const currentTx = transactions.filter(
-    (t) => t.date.startsWith(currentMonth) && t.type === 'expense'
+    (t) => t.date.startsWith(currentMonth) && countsAsSpending(t)
   );
   const prevTx = transactions.filter(
-    (t) => t.date.startsWith(prevMonth) && t.type === 'expense'
+    (t) => t.date.startsWith(prevMonth) && countsAsSpending(t)
   );
 
   const sumBy = (list: FinanceTransaction[]) =>

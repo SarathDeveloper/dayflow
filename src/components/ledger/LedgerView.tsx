@@ -156,7 +156,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
     return { from: '0000-01-01', to: '9999-12-31' };
   }, [rangeMode, selectedDate, customFrom, customTo]);
 
-  const rangeSummary = useMemo(() => summarize(transactions, range), [transactions, range]);
+  const rangeSummary = useMemo(() => summarize(transactions, range, { cashFlow: true }), [transactions, range]);
 
   const accountNames = useMemo(
     () => new Map(accounts.map((a) => [a.id, accountLabel(a)])),

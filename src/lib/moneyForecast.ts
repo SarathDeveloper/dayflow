@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 /**
  * Looking ahead in the month: what the month will likely cost, where the
  * balance lands, and how much can be spent per day from now on. Pure; rupees
@@ -60,7 +61,7 @@ function shiftDate(date: string, days: number): string {
 
 /** Spending that counts toward the month (transfers are moves between own accounts). */
 function isSpend(tx: FinanceTransaction): boolean {
-  return tx.type === 'expense';
+  return countsAsSpending(tx);
 }
 
 export function unpaidBills(
@@ -70,7 +71,9 @@ export function unpaidBills(
   payments: BillPayment[],
 ): UpcomingBill[] {
   return templates
-    .filter((bill) => bill.active)
+    .filter((bill) => bill.active
+      && (!bill.startMonth || bill.startMonth <= monthKey)
+      && (!bill.endMonth || bill.endMonth >= monthKey))
     .map((bill) => {
       const payment = payments.find((item) => item.billId === bill.id && item.month === monthKey);
       if (payment?.paid) return null;
@@ -120,7 +123,7 @@ export function forecastMonth(input: {
     if (tx.date < firstDate) firstDate = tx.date;
     if (monthKeyOf(tx.date) === monthKey) {
       if (isSpend(tx)) spentPaise += toPaise(tx.amount);
-      if (tx.type === 'income') incomePaise += toPaise(tx.amount);
+      if (countsAsIncome(tx)) incomePaise += toPaise(tx.amount);
     }
     if (isSpend(tx) && tx.date >= paceFrom && !billTxIds.has(tx.id) && !isRepeating(tx)) pacePaise += toPaise(tx.amount);
   }
@@ -194,7 +197,7 @@ export function findSubscriptions(transactions: FinanceTransaction[], billPaymen
   const from = shiftDate(today, -183);
   const groups = new Map<string, { name: string; category: string; amount: number; months: Set<string>; lastDate: string }>();
   for (const tx of transactions) {
-    if (tx.type !== 'expense' || tx.date < from || tx.date > today || billTxIds.has(tx.id) || tx.linkedTransferId) continue;
+    if (!countsAsSpending(tx) || tx.date < from || tx.date > today || billTxIds.has(tx.id) || tx.linkedTransferId) continue;
     const name = tx.note?.trim() || tx.category;
     const key = `${name.toLowerCase()}|${toPaise(tx.amount)}`;
     const group = groups.get(key) ?? { name, category: tx.category, amount: tx.amount, months: new Set<string>(), lastDate: tx.date };
@@ -205,7 +208,7 @@ export function findSubscriptions(transactions: FinanceTransaction[], billPaymen
   return [...groups.values()]
     .filter((group) => group.months.size >= 3)
     // One payment a month: more than that is a habit (tea), not a subscription.
-    .filter((group) => transactions.filter((tx) => tx.type === 'expense' && tx.date >= from && (tx.note?.trim() || tx.category) === group.name && toPaise(tx.amount) === toPaise(group.amount)).length <= group.months.size + 1)
+    .filter((group) => transactions.filter((tx) => countsAsSpending(tx) && tx.date >= from && (tx.note?.trim() || tx.category) === group.name && toPaise(tx.amount) === toPaise(group.amount)).length <= group.months.size + 1)
     .map((group) => ({
       name: group.name,
       category: group.category,

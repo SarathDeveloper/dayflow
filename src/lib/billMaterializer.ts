@@ -65,10 +65,16 @@ export function materializeBillPayments(
 
   for (const template of templates) {
     if (!template.active) continue;
-    const startMonth = createdMonthOf(template.createdAt);
+    // A bill with a range (a loan EMI) starts no earlier than both its creation
+    // and its first month (earlier EMIs were paid before Dayflow knew of them)
+    // and stops after its last month.
+    const createdMonth = createdMonthOf(template.createdAt);
+    const startMonth = template.startMonth && template.startMonth > createdMonth ? template.startMonth : createdMonth;
+    const lastMonth = template.endMonth && template.endMonth < currentMonth ? template.endMonth : currentMonth;
+    if (startMonth > lastMonth) continue;
     const start = startMonth < currentMonth ? startMonth : currentMonth;
     let count = 0;
-    for (const month of eachMonth(start, currentMonth)) {
+    for (const month of eachMonth(start, lastMonth)) {
       if (count >= 24) break;
       const key = `${template.id}|${month}`;
       if (existingKeys.has(key)) continue;

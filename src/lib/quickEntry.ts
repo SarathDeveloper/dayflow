@@ -251,7 +251,7 @@ export function repeatableEntries(transactions: FinanceTransaction[], today: str
   const from = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`;
   const groups = new Map<string, RepeatableEntry>();
   for (const tx of transactions) {
-    if ((tx.type !== 'expense' && tx.type !== 'income') || tx.linkedTransferId || tx.date < from || tx.date > today) continue;
+    if ((tx.type !== 'expense' && tx.type !== 'income') || tx.linkedTransferId || tx.debtRole || tx.billPaymentId || tx.date < from || tx.date > today) continue;
     const note = tx.note?.trim() || undefined;
     const key = [tx.type, tx.category, toPaise(tx.amount), (note ?? '').toLowerCase()].join('|');
     const existing = groups.get(key);

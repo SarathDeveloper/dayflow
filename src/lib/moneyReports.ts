@@ -1,3 +1,4 @@
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 /**
  * Long-term money views: a year month by month, category trends over several
  * months, and net worth (accounts + money lent − money owed) at each month end.
@@ -34,8 +35,8 @@ export function yearReport(transactions: FinanceTransaction[], year: number): Ye
   for (const tx of transactions) {
     if (Number(tx.date.slice(0, 4)) !== year) continue;
     const month = Number(tx.date.slice(5, 7)) - 1;
-    if (tx.type === 'income') income[month] += toPaise(tx.amount);
-    if (tx.type === 'expense') {
+    if (countsAsIncome(tx)) income[month] += toPaise(tx.amount);
+    if (countsAsSpending(tx)) {
       expense[month] += toPaise(tx.amount);
       byCategory.set(tx.category, (byCategory.get(tx.category) ?? 0) + toPaise(tx.amount));
     }
@@ -89,7 +90,7 @@ export function categoryTrends(
   const position = new Map(months.map((month, index) => [month, index]));
   const table = new Map<string, number[]>();
   for (const tx of transactions) {
-    if (tx.type !== 'expense') continue;
+    if (!countsAsSpending(tx)) continue;
     const index = position.get(monthKeyOf(tx.date));
     if (index === undefined) continue;
     const row = table.get(tx.category) ?? new Array(count).fill(0);

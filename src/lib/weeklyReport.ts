@@ -1,3 +1,4 @@
+import { countsAsSpending } from './moneyLinks';
 /**
  * Weekly Self-Improvement Report: one Monday–Sunday week compared with the
  * week before. Habits with an amount (English minutes, learning hours) are
@@ -88,7 +89,7 @@ function weekNumbers(input: WeeklyReportInput, from: string, to: string, today: 
 
   const inWeek = (date: string) => date >= from && date <= to;
   const spent = input.transactions
-    .filter((tx) => tx.type === 'expense' && inWeek(tx.date))
+    .filter((tx) => countsAsSpending(tx) && inWeek(tx.date))
     .reduce(addRupees, 0);
   const saved = countedSavingsAmounts(input.savingsEntries, input.transactions, input.accounts)
     .filter((item) => inWeek(item.date))
