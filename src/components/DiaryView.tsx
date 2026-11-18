@@ -81,7 +81,7 @@ export const DiaryView: React.FC<DiaryViewProps> = ({
             A day can hold as many notes as you need.
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={onAdd}>
+        <Button variant="primary" size="sm" className="shrink-0 whitespace-nowrap" onClick={onAdd}>
           <Plus className="w-4 h-4" />
           New note
         </Button>

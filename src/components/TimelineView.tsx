@@ -88,11 +88,11 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
           </p>
         </div>
 
-        <div className="text-right">
+        <div className="w-full sm:w-auto sm:text-right">
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-            {dateTasks.filter((t) => t.completed).length} of {dateTasks.length} Completed
+            {dateTasks.filter((t) => t.completed).length} of {dateTasks.length} completed
           </span>
-          <div className="w-32 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden mt-1">
+          <div className="w-full sm:w-32 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden mt-1">
             <div
               className="h-full bg-emerald-500 dark:bg-emerald-400 transition-all duration-300"
               style={{
@@ -260,7 +260,8 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                       <div className="flex items-start gap-2.5 min-w-0">
                         <button
                           onClick={() => onToggleComplete(task.id)}
-                          className="mt-0.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+                          className="-m-2 p-2 shrink-0 rounded-full text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+                          aria-label={task.completed ? 'Mark incomplete' : 'Mark complete'}
                         >
                           {task.completed ? (
                             <CheckCircle2 className="w-5 h-5 text-emerald-500 dark:text-emerald-400" />

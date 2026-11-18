@@ -112,7 +112,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <div className="flex items-start gap-2.5">
           <button
             onClick={() => onToggleComplete(task.id)}
-            className="w-7 h-7 min-w-[28px] min-h-[28px] mt-0.5 flex items-center justify-center text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors focus:outline-none rounded-full active:scale-90 shrink-0"
+            className="w-10 h-10 min-w-[40px] min-h-[40px] -mt-1 -mx-1.5 -mb-1.5 flex items-center justify-center text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors focus:outline-none rounded-full active:scale-90 shrink-0"
             title={task.completed ? 'Mark incomplete' : 'Mark complete'}
           >
             {task.completed ? (

@@ -234,9 +234,9 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
           )
         )}
 
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1 [&>button]:whitespace-nowrap">
           <Button type="button" size="sm" onClick={commit} disabled={picked.length === 0}>
-            Set my top {picked.length || TOP_PICKS}
+            Set top {picked.length || TOP_PICKS}
           </Button>
           <Button
             type="button"
@@ -246,9 +246,9 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({
             title="Picks by priority and due date that fit the time you have"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            Suggest for me
+            Suggest
           </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => update({ ...plan, planned: true })}>
+          <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={() => update({ ...plan, planned: true })}>
             Not today
           </Button>
         </div>

@@ -60,39 +60,37 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
   return (
     <div className="max-w-4xl lg:max-w-6xl mx-auto space-y-6 pb-20 lg:pb-8">
       {/* View Selector Tabs */}
-      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveSubTab('categories')}
-            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-colors ${
-              activeSubTab === 'categories'
-                ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Folder className="w-4 h-4" />
-            <span>Categories ({categories.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveSubTab('tags')}
-            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-colors ${
-              activeSubTab === 'tags'
-                ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <TagIcon className="w-4 h-4" />
-            <span>Tags ({allUniqueTags.length})</span>
-          </button>
+      <div className="flex items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+        {/* Segmented switch: looks different from the action button on purpose. */}
+        <div className="flex min-w-0 items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
+          {([
+            { id: 'categories', label: 'Categories', count: categories.length, icon: Folder },
+            { id: 'tags', label: 'Tags', count: allUniqueTags.length, icon: TagIcon },
+          ] as const).map(({ id, label, count, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveSubTab(id)}
+              aria-pressed={activeSubTab === id}
+              className={`min-h-9 px-3 rounded-lg font-bold text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                activeSubTab === id
+                  ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              <span>{label}</span>
+              <span className="text-slate-400 font-semibold">{count}</span>
+            </button>
+          ))}
         </div>
 
         {activeSubTab === 'categories' && (
           <button
             onClick={() => setShowAdd(!showAdd)}
-            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30"
+            className="shrink-0 min-h-10 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shadow-md shadow-indigo-600/30"
           >
             <Plus className="w-4 h-4" />
-            <span>New Category</span>
+            <span>New</span>
           </button>
         )}
       </div>
@@ -183,10 +181,11 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
                               });
                               if (confirmed) onDeleteCategory(cat.id);
                             }}
-                            className="text-slate-400 hover:text-rose-500 p-1"
+                            className="-my-2 -mr-2 flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40"
                             title="Delete category"
+                            aria-label={`Delete ${cat.name} category`}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         )}
                       </div>

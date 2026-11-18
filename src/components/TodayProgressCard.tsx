@@ -33,6 +33,49 @@ function barColor(percent: number | null): string {
   return 'bg-amber-400';
 }
 
+// Upbeat, action-first lines for today. One is picked per date so it stays
+// put while the day's score is in the same band.
+const TODAY_LINES: Record<'start' | 'going' | 'half' | 'close', string[]> = {
+  start: ['Start with one small win', 'Pick one task and begin', 'Your day, your move. Go!'],
+  going: ['Great start. Keep it rolling!', 'Momentum is building. Next one!', 'Nice work. Tackle the next task'],
+  half: ['Over halfway. Keep pushing!', 'You’re on a roll. Keep going!', 'Strong progress. Finish a few more'],
+  close: ['Almost there. Finish strong!', 'Just a little more to go!', 'So close. Wrap it up!'],
+};
+
+function headline(percent: number | null, isToday: boolean, date: string): string {
+  if (percent === null) return isToday ? 'A clear day. Plan something great' : 'Nothing was due';
+  if (percent >= 100) return isToday ? 'All done. You crushed it!' : 'Everything done. Great day!';
+  if (!isToday) {
+    if (percent >= 80) return 'Almost a perfect day';
+    if (percent >= 50) return 'A solid day';
+    return 'A lighter day. Tomorrow is fresh';
+  }
+  const band = percent >= 80 ? 'close' : percent >= 50 ? 'half' : percent > 0 ? 'going' : 'start';
+  const lines = TODAY_LINES[band];
+  const seed = [...date].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+  return lines[seed % lines.length];
+}
+
+// The user's own headline for today (device-only preference). Empty = automatic.
+const CUSTOM_LINE_KEY = 'dayflow_progress_headline_v1';
+
+function readCustomLine(): string {
+  try {
+    return localStorage.getItem(CUSTOM_LINE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeCustomLine(line: string): void {
+  try {
+    if (line) localStorage.setItem(CUSTOM_LINE_KEY, line);
+    else localStorage.removeItem(CUSTOM_LINE_KEY);
+  } catch {
+    // Storage blocked: the line still shows until the app reloads.
+  }
+}
+
 const ScoreRing: React.FC<{ percent: number | null }> = ({ percent }) => {
   const radius = 26;
   const circumference = 2 * Math.PI * radius;
@@ -65,6 +108,15 @@ export const TodayProgressCard: React.FC<TodayProgressCardProps> = ({ progress, 
   const [showMissed, setShowMissed] = useState(false);
   const { percent, areas, best, missed } = progress;
   const isToday = when === 'today';
+  const [customLine, setCustomLine] = useState(readCustomLine);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const saveCustom = () => {
+    const line = draft.trim();
+    setCustomLine(line);
+    writeCustomLine(line);
+    setEditing(false);
+  };
 
   // A future day has nothing to score yet: show what is planned instead.
   if (when === 'future') {
@@ -100,19 +152,33 @@ export const TodayProgressCard: React.FC<TodayProgressCardProps> = ({ progress, 
         <ScoreRing percent={percent} />
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{title}</p>
-          <p className="text-sm font-bold text-slate-900 dark:text-white">
-            {percent === null
-              ? 'Nothing due yet'
-              : percent >= 100
-                ? 'Everything done. Great day!'
-                : percent >= 80
-                  ? 'Almost there'
-                  : percent >= 50
-                    ? 'Good progress'
-                    : isToday
-                      ? 'Plenty of day left'
-                      : 'A lighter day'}
-          </p>
+          {editing ? (
+            <input
+              autoFocus
+              value={draft}
+              maxLength={60}
+              placeholder="Your own line (empty = automatic)"
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={saveCustom}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveCustom();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-transparent px-2 py-0.5 text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-indigo-400"
+            />
+          ) : (
+            <button
+              type="button"
+              title="Tap to write your own line"
+              onClick={() => {
+                setDraft(customLine);
+                setEditing(true);
+              }}
+              className="block max-w-full truncate text-left text-sm font-bold text-slate-900 dark:text-white"
+            >
+              {isToday && customLine ? customLine : headline(percent, isToday, progress.date)}
+            </button>
+          )}
           {best && (
             <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
               <Trophy className="h-3 w-3 text-amber-500" />
@@ -123,7 +189,7 @@ export const TodayProgressCard: React.FC<TodayProgressCardProps> = ({ progress, 
       </div>
 
       {areas.length > 0 && (
-        <ul className="grid grid-cols-2 gap-2">
+        <ul className="grid grid-cols-2 gap-2 [&>li:last-child:nth-child(odd)]:col-span-2">
           {areas.map((area) => {
             const Icon = AREA_ICON[area.key];
             return (

@@ -125,22 +125,23 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
   return (
     <div className="max-w-xl mx-auto py-4 px-4 space-y-6 text-center">
       {/* Modes Bar */}
-      <div className="flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+      <div className="grid grid-cols-3 gap-1.5 bg-slate-100 dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
         {[
-          { id: 'pomodoro', label: '🧠 Focus (25m)' },
-          { id: 'shortBreak', label: '☕ Short Break (5m)' },
-          { id: 'longBreak', label: '🌿 Long Break (15m)' },
+          { id: 'pomodoro', label: 'Focus', minutes: '25 min' },
+          { id: 'shortBreak', label: 'Short break', minutes: '5 min' },
+          { id: 'longBreak', label: 'Long break', minutes: '15 min' },
         ].map((m) => (
           <button
             key={m.id}
             onClick={() => setTimerMode(m.id as any)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+            className={`flex min-h-12 flex-col items-center justify-center rounded-xl px-1 py-1.5 transition-all ${
               mode === m.id
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            {m.label}
+            <span className="text-xs font-bold leading-tight whitespace-nowrap">{m.label}</span>
+            <span className={`text-[11px] leading-tight ${mode === m.id ? 'text-indigo-100' : 'text-slate-400'}`}>{m.minutes}</span>
           </button>
         ))}
       </div>

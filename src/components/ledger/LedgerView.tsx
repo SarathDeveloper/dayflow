@@ -284,12 +284,6 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
             </button>
           </div>
         </Card>
-        <LedgerEmptyState
-          title="No accounts yet"
-          hint="Create Cash Wallet, YES Bank and Indian Bank to start recording daily expenses."
-          actionLabel="Add your first account"
-          onAction={onAddAccount}
-        />
       </div>
     );
   }

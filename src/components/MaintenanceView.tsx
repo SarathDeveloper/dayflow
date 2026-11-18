@@ -223,9 +223,12 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
 
   return (
     <section className="mx-auto max-w-2xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-xl font-bold text-slate-900 dark:text-white"><Wrench className="size-5" /> Vehicle &amp; Home</h2>
-        <Button onClick={startNew}><Plus className="size-4" /> Add maintenance</Button>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"><Wrench className="size-5 text-indigo-600 dark:text-indigo-400" /> Vehicle &amp; Home</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Services, filters and other upkeep, with reminders.</p>
+        </div>
+        <Button size="sm" className="shrink-0 whitespace-nowrap" onClick={startNew}><Plus className="size-4" /> Add</Button>
       </div>
 
       {storageError && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-100">{storageError}</p>}
@@ -278,7 +281,16 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
       )}
 
       {items.length === 0 && !editing && (
-        <Card className="p-4 text-sm text-slate-600 dark:text-slate-300">Add a vehicle service, filter replacement or any other recurring maintenance task. Dayflow reminds you before it is due and keeps the service history.</Card>
+        <Card className="p-8 text-center space-y-2">
+          <Wrench className="w-8 h-8 mx-auto text-indigo-500" />
+          <p className="text-sm font-bold text-slate-800 dark:text-slate-100">No maintenance yet</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mx-auto">
+            Add a vehicle service, filter change or any other recurring task. Dayflow reminds you before it's due and keeps the service history.
+          </p>
+          <div className="pt-2">
+            <Button size="sm" onClick={startNew}><Plus className="size-4" /> Add maintenance</Button>
+          </div>
+        </Card>
       )}
 
       {sorted.map((item) => {

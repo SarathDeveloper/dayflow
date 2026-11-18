@@ -95,7 +95,7 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
 
             <button
               onClick={onRequestPermission}
-              className="shrink-0 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] sm:text-xs transition-colors flex items-center gap-1 shadow-sm self-stretch sm:self-auto justify-center"
+              className="shrink-0 min-h-9 sm:min-h-0 px-3 py-1.5 sm:py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] sm:text-xs transition-colors flex items-center gap-1 shadow-sm self-stretch sm:self-auto justify-center"
             >
               <Bell className="w-3.5 h-3.5" />
               <span>Enable Reminders</span>

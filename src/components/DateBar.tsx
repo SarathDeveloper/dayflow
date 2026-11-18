@@ -58,14 +58,16 @@ export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, ta
         </button>
 
         {/* Date Selector Strip */}
-        <div className="flex-1 flex items-center justify-start sm:justify-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-1 pr-2 snap-x snap-mandatory touch-pan-x">
-          {days.map((day) => {
+        {/* Phones show the 5 middle days (all fit, nothing cut off); 7 from sm up. */}
+        <div className="flex-1 min-w-0 grid grid-cols-5 sm:flex sm:justify-center gap-1 sm:gap-1.5 py-1">
+          {days.map((day, index) => {
             const isSelected = day.dateStr === selectedDate;
+            const outer = index === 0 || index === days.length - 1;
             return (
               <button
                 key={day.dateStr}
                 onClick={() => onSelectDate(day.dateStr)}
-                className={`snap-center shrink-0 relative flex flex-col items-center justify-center min-w-[44px] sm:min-w-[62px] min-h-[48px] sm:min-h-[52px] py-1.5 sm:py-2 px-1.5 sm:px-2 rounded-xl transition-all active:scale-95 ${
+                className={`${outer ? 'hidden sm:flex' : 'flex'} relative flex-col items-center justify-center min-w-0 sm:min-w-[62px] min-h-[52px] py-1.5 sm:py-2 px-1 sm:px-2 rounded-xl transition-all active:scale-95 ${
                   isSelected
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 scale-105 font-bold'
                     : day.isToday
@@ -73,10 +75,10 @@ export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, ta
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
               >
-                <span className="text-[9px] sm:text-[10px] uppercase tracking-wider opacity-80">
+                <span className="text-[10px] uppercase tracking-wider opacity-80">
                   {day.dayName}
                 </span>
-                <span className="text-xs sm:text-base font-extrabold leading-tight">
+                <span className="text-[15px] sm:text-base font-extrabold leading-tight">
                   {day.dayNumber}
                 </span>
 
@@ -92,7 +94,7 @@ export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, ta
                           : 'bg-indigo-500 dark:bg-indigo-400'
                       }`}
                     />
-                    <span className="text-[8px] sm:text-[9px] opacity-80">
+                    <span className="text-[9px] opacity-80">
                       {day.completedCount}/{day.totalTasks}
                     </span>
                   </div>

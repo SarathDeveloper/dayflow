@@ -155,12 +155,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   return (
     <div className="space-y-4">
       <Card className="p-3 sm:p-5">
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-white">Calendar</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">Tasks, habits, notes, and money</p>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between gap-1 rounded-xl bg-slate-50 dark:bg-slate-800/60 sm:bg-transparent sm:dark:bg-transparent">
             <button
               type="button"
               onClick={() => shiftMonth(-1)}
