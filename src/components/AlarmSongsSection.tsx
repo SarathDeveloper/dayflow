@@ -47,7 +47,7 @@ export const AlarmSongsSection: React.FC = () => {
   const remove = async (id: string, name: string) => {
     const ok = await showConfirm({
       title: 'Remove this song?',
-      message: `${songTitle(name)} will be removed from this device. Alarms that use it will play your first song instead, or the chime if none are left.`,
+      message: `${songTitle(name)} will be removed. Its alarms will use your first song, or the chime.`,
       confirmLabel: 'Remove',
       tone: 'danger',
     });
@@ -83,7 +83,7 @@ export const AlarmSongsSection: React.FC = () => {
       <details className="text-xs text-slate-600 dark:text-slate-400">
         <summary className="w-fit cursor-pointer rounded py-1 font-medium text-indigo-700 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-indigo-300">Song limits and storage</summary>
         <p className="mt-2 leading-relaxed">
-          Add up to {MAX_SONGS} songs, 15 MB each. Songs stay on this device and are not synced or backed up.
+          Up to {MAX_SONGS} songs, 15 MB each. Songs stay on this device.
           {!isNativeAndroid() && ' On the website, alarms ring only while Dayflow is open.'}
         </p>
       </details>

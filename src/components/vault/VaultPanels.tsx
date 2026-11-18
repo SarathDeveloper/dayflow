@@ -96,7 +96,7 @@ export function VaultList({ entries, health, trashCount, backupDue, busy, onOpen
       {backupDue && entries.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100">
           <Clock className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1">No encrypted backup saved in the last 30 days. A backup is your copy if you lose access to your account.</span>
+          <span className="min-w-0 flex-1">No backup in 30 days. Save one in case you lose access.</span>
           <Button size="sm" variant="secondary" disabled={busy} onClick={onBackup}><Download className="size-4" /> Save backup</Button>
         </div>
       )}

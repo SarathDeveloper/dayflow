@@ -711,7 +711,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
   const confirmUseAccountVault = async () => {
     const ok = await showConfirm({
       title: 'Use your account\'s document vault here?',
-      message: 'The document vault on this device is removed and the one in your account is downloaded. Documents that are only on this device are lost unless you saved a backup first (Vault settings → Save backup).',
+      message: 'This device\'s vault is replaced with your account\'s copy. Documents only on this device are lost unless you saved a backup.',
       tone: 'danger',
       confirmLabel: 'Remove and download',
     });
@@ -1001,7 +1001,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             error ? <Button variant="secondary" onClick={() => { setError(''); setReload((value) => value + 1); }}><RefreshCw className="size-4" /> Retry</Button> : <p role="status">Loading…</p>
           ) : envelope?.version === 1 ? (
             <form className="space-y-3" onSubmit={submitUpgrade} autoComplete="off">
-              <p>This vault was made with a passphrase. Enter it once to update the vault; after that it opens without a passphrase and syncs with your account.</p>
+              <p>Enter your old passphrase once. After that the vault opens on its own and syncs.</p>
               <label className={labelClass}><span>Vault passphrase</span>
                 <input className={inputClass} type="password" required maxLength={256} autoComplete="off" value={passphrase} disabled={busy} onChange={(e) => setPassphrase(e.target.value)} />
               </label>
@@ -1205,10 +1205,10 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
         <Card className="p-4">
           <form className="space-y-3" onSubmit={saveRenewal} autoComplete="off">
             <h3 className="font-bold text-slate-900 dark:text-white">Renew {detailDoc.title}</h3>
-            <p className="text-sm text-slate-600 dark:text-slate-300">The new file becomes the current version. Earlier versions are kept, and reminders switch to the new expiry date.</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">The new file becomes current. Old versions are kept; reminders use the new expiry.</p>
             {filePicker(view.file, view.back)}
             {currentRevision(detailDoc).back && !view.back && (
-              <p className="text-xs text-amber-700 dark:text-amber-300">The current version has a back side. Add the renewed back too, or the new version will have the front only.</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300">The current version has a back side. Add the new back too.</p>
             )}
             {draftFields(view.draft, (draft) => setView({ ...view, draft }), { details: false, expiry: true, note: true })}
             <div className="flex gap-2">
@@ -1243,7 +1243,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             <label className="flex items-start gap-2">
               <input type="checkbox" className="mt-1" checked={unlockedIndex.showReminderTitles} disabled={busy} onChange={(e) => toggleTitles(e.target.checked)} />
               <span><span className="font-semibold">Show document titles in reminders</span><br />
-                <span className="text-xs text-slate-500 dark:text-slate-400">Off by default. When on, titles are copied into the unencrypted reminder schedule and appear on the lock screen and Today.</span></span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">Titles then show on the lock screen and Today, unencrypted.</span></span>
             </label>
             <p className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
               Titles, categories, links, file names, files and versions are encrypted. The reminder schedule (dates and expiry dates under a random key; titles only if the option above is on) is stored unencrypted on each device so reminders can fire.

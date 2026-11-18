@@ -192,7 +192,7 @@ export function DebtPayoffPlanner({ debts, today }: { debts: Debt[]; today: stri
         </div>
       </div>
       {noSchedule ? (
-        <p className="text-xs text-slate-600 dark:text-slate-300">These debts have no EMI. Enter what you can pay each month to see when you’ll be clear.</p>
+        <p className="text-xs text-slate-600 dark:text-slate-300">No EMI set. Enter a monthly payment to see your payoff date.</p>
       ) : (
         <div className="grid grid-cols-3 gap-2 text-center">
           <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 p-2">

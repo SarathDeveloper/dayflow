@@ -285,7 +285,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         ))}
         {!native && (
           <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
-            On the website, reminders show only while this tab is open. Use the Android app to get them with the app closed.
+            On the website, keep this tab open. The Android app works closed.
           </p>
         )}
       </section>

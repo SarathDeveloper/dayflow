@@ -172,7 +172,7 @@ export const WeeklyReportSheet: React.FC<WeeklyReportSheetProps> = ({ input, tod
 
           {report.habits.length === 0 && (
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Tip: add habits like “Gym”, “English practice” (minutes) or “Technical learning” (hours) and they appear here each week.
+              Tip: habits you add, like “Gym” or “English practice”, show up here.
             </p>
           )}
         </div>

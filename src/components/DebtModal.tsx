@@ -229,8 +229,8 @@ export const DebtModal: React.FC<DebtModalProps> = ({
                   {linked ? 'Recorded in the ledger' : initialDebt ? 'Add this money to the ledger now' : 'Record the money in the ledger'}
                   <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
                     {direction === 'owed'
-                      ? 'The borrowed money goes into the account. It is not counted as income.'
-                      : 'The lent money leaves the account. It is not counted as spending.'}
+                      ? 'Goes into the account. Not counted as income.'
+                      : 'Leaves the account. Not counted as spending.'}
                   </span>
                 </span>
               </label>

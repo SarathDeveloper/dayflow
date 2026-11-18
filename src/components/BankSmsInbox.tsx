@@ -210,8 +210,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
                 Turn on Dayflow in the notification access list, then come back.
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                On Android 13 and newer the switch may be greyed out. Fix it in App info → three
-                dots → Allow restricted settings.
+                Switch greyed out? App info → ⋮ → Allow restricted settings.
               </p>
               <Button type="button" size="sm" variant="secondary" onClick={() => void openAppInfo()}>
                 Open App info
@@ -223,8 +222,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
 
       {enabled && pending.length === 0 && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Waiting for a bank text. If one never shows up, make sure the messages app still posts a
-          notification for that bank, and set Dayflow to Unrestricted battery.
+          Waiting for a bank text. None coming? Check the bank's notifications and set battery to Unrestricted.
         </p>
       )}
 

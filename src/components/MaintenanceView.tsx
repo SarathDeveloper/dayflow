@@ -183,7 +183,7 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
   const deleteService = async (item: MaintenanceItem, record: MaintenanceServiceRecord) => {
     const ok = await showConfirm({
       title: 'Delete service record?',
-      message: `The ${formatShortDate(record.date)} service will be removed from the history. The next due date is not changed. A linked Money expense stays in Money.`,
+      message: `The ${formatShortDate(record.date)} service is removed. The next due date and any linked expense stay.`,
       tone: 'danger',
       confirmLabel: 'Delete',
     });
@@ -285,7 +285,7 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
           <Wrench className="w-8 h-8 mx-auto text-indigo-500" />
           <p className="text-sm font-bold text-slate-800 dark:text-slate-100">No maintenance yet</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mx-auto">
-            Add a vehicle service, filter change or any other recurring task. Dayflow reminds you before it's due and keeps the service history.
+            Add a service or repeat job. We'll remind you before it's due.
           </p>
           <div className="pt-2">
             <Button size="sm" onClick={startNew}><Plus className="size-4" /> Add maintenance</Button>
@@ -345,7 +345,7 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
                       {linkable.slice(0, 200).map((tx) => <option key={tx.id} value={tx.id}>{txLabel(tx)}</option>)}
                     </select>
                   ))}
-                  <p className="text-xs text-slate-500 dark:text-slate-400">A linked expense is counted once: Money keeps it, and this record shows its amount. An entered amount is not added to Money.</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Linked expenses count once, in Money. Typed amounts aren't added to Money.</p>
                 </fieldset>
                 <div className="flex gap-2"><Button type="submit">{serviceForm.recordId ? 'Save record' : 'Record service'}</Button><Button type="button" variant="ghost" onClick={() => setServiceForm(null)}>Cancel</Button></div>
               </form>
@@ -390,7 +390,7 @@ export default function MaintenanceView(props: MaintenanceViewProps) {
 
       <Card className="space-y-2 p-4">
         <h3 className="text-sm font-bold text-slate-900 dark:text-white">Export &amp; restore</h3>
-        <p className="text-xs text-slate-500 dark:text-slate-400">Maintenance records sync with your account and are included in the full backup in Settings. You can also export just these records and import them on another device; newer edits win.</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Synced and backed up. You can also export just these records.</p>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" disabled={items.length === 0} onClick={exportAll}><Download className="size-4" /> Export JSON</Button>
           <Button size="sm" variant="secondary" onClick={() => importRef.current?.click()}><Upload className="size-4" /> Import JSON</Button>

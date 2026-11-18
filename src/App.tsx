@@ -3103,7 +3103,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     const linkedIds = debtTransactionIds(debt, transactionsRef.current);
     const removeEntries = linkedIds.length > 0 && (await showConfirm({
       title: `Also delete its ${linkedIds.length} ledger ${linkedIds.length === 1 ? 'entry' : 'entries'}?`,
-      message: 'Deleting them puts the money back in the account balances as if it never moved. Keep them if the money really moved.',
+      message: 'Balances go back as if the money never moved. Keep them if it really moved.',
       tone: 'danger',
       confirmLabel: 'Delete entries',
       cancelLabel: 'Keep entries',
@@ -3154,7 +3154,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         title: owed
           ? `Record ${formatRupees(left)} repaid from ${account.name}?`
           : `Record ${formatRupees(left)} received into ${account.name}?`,
-        message: 'It is added to the ledger and the debt is marked paid. Unticking it later removes the entry.',
+        message: 'Adds it to the ledger and marks the debt paid. Untick later to undo.',
         confirmLabel: 'Record and mark paid',
         cancelLabel: 'Cancel',
       });

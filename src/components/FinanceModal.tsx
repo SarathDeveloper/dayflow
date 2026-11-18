@@ -447,8 +447,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
                   )}
               </div>
               <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                GPay and PhonePe are payment apps. The money is debited from the account you
-                selected above.
+                Paid from the account selected above.
               </p>
             </div>
           )}

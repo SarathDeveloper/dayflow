@@ -552,7 +552,7 @@ export default function PasswordVaultView() {
       <Card className="space-y-3 p-5">
         <h3 className="font-bold">One last time: your old vault passphrase</h3>
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          This vault was made with a passphrase. Enter it once and the vault opens on its own from now on, on all your signed-in devices.
+          Enter it once. After that the vault opens on its own on all your devices.
         </p>
         <form className="space-y-3" onSubmit={convertVault} autoComplete="off">
           <PassphraseField label="Old vault passphrase" value={passphrase} onChange={setPassphrase} disabled={busy} />

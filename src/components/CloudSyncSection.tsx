@@ -102,7 +102,7 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
             onClick={async () => {
               const confirmed = await showConfirm({
                 title: 'Restore from the cloud?',
-                message: 'The data on this device is replaced with the cloud copy. Changes that have not synced yet are lost.',
+                message: 'This device is replaced with the cloud copy. Unsynced changes are lost.',
                 tone: 'warning',
                 confirmLabel: 'Restore',
               });
@@ -158,7 +158,7 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
 
       {configured && (
         <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
-          Your tasks, money and diary sync to your account, and this device keeps a full copy that works offline.
+          Synced to your account, with a full offline copy here.
         </p>
       )}
     </div>

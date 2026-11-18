@@ -232,14 +232,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <details className="mt-2 text-xs text-slate-600 dark:text-slate-400">
                     <summary className="w-fit cursor-pointer rounded py-1 font-medium text-indigo-700 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-indigo-300">How app lock works</summary>
                     <p className="mt-2 leading-relaxed">
-                      On the web, Dayflow locks after a minute away. Your account password can also unlock it.
-                      App lock blocks access to Dayflow but does not encrypt data saved in this browser.
+                      Locks after 1 minute away. Your account password also unlocks it.
+                      It blocks access but doesn't encrypt data in this browser.
                     </p>
                   </details>
                 )}
                 {appLockOn && !appLockSupported && (
                   <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-                    This device no longer offers a fingerprint, face unlock or PIN to the browser. Turn the lock off, or set one up again.
+                    This device lost its fingerprint, face or PIN unlock. Set one up again, or turn the lock off.
                   </p>
                 )}
                 {appLockError && <p role="alert" className="mt-2 text-xs text-rose-700 dark:text-rose-300">{appLockError}</p>}
@@ -253,8 +253,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <section aria-labelledby="settings-alerts" className="space-y-3">
               <h3 id="settings-alerts" className={sectionTitle}>Notifications</h3>
               <p className={helpText}>
-                Reminder sound, reading reminders aloud, quiet hours, alarm songs and the checks that keep
-                reminders arriving are all on the Notifications page.
+                Sounds, quiet hours and alarm songs are on the Notifications page.
               </p>
               <button
                 type="button"
@@ -278,7 +277,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className={`space-y-3 ${divider}`}>
               <h3 className={sectionTitle}>Backup & recovery</h3>
               <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-                The file includes tasks, diary, habits, goals, money, and alarms. It does not include your custom alarm song.
+                Includes tasks, diary, habits, goals, money and alarms. Not alarm songs.
               </p>
               {backupFolderSupported && (
                 <div className="space-y-2">

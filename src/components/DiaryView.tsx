@@ -104,7 +104,7 @@ export const DiaryView: React.FC<DiaryViewProps> = ({
           <BookOpen className="w-10 h-10 text-slate-400 dark:text-slate-600 mx-auto mb-3" />
           <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">No notes yet</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs mx-auto">
-            Write the first note for {formatLongDate(selectedDate)}. You can add another later the same day.
+            Write the first note for {formatLongDate(selectedDate)}.
           </p>
           <div className="mt-4">
             <Button variant="primary" size="sm" onClick={onAdd}>

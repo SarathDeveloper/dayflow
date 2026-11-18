@@ -90,7 +90,7 @@ export function BillPayModal({ payment, template, accounts, defaultAccountId, to
               {PAYMENT_METHODS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
-          <p className="text-xs text-slate-500 dark:text-slate-400">This adds the expense to the ledger. Already entered it yourself? Cancel; Dayflow offers to link a matching expense when you save it.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Adds the expense to the ledger. Already entered it? Cancel; we'll offer to link it.</p>
           {error && <p role="alert" className="rounded-xl bg-rose-50 dark:bg-rose-950 px-3 py-2 text-xs text-rose-700 dark:text-rose-200">{error}</p>}
           <div className="flex gap-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancel</Button>

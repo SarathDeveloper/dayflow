@@ -69,8 +69,7 @@ export const AppUpdatesSection: React.FC = () => {
         <span>App updates</span>
       </h3>
       <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-        Dayflow updates itself: new screens and fixes download in the background and apply the next time you open the
-        app. When phone features change, it offers a new app install.
+        Updates download in the background and apply when you reopen Dayflow.
       </p>
       {status && (
         <p className="text-[11px] text-slate-600 dark:text-slate-300">

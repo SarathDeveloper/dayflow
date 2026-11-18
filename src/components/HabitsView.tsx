@@ -350,7 +350,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
               })}
             </div>
             <p className="mt-2 text-[10px] text-slate-400">
-              Tap a future day to plan a rest day (R). Rest days keep your streak and never count as missed.
+              Tap a future day to plan a rest day (R). Streaks stay safe.
             </p>
           </Card>
         </section>
@@ -392,7 +392,7 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
                 </p>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   {overall.missedDays} missed {overall.missedDays === 1 ? 'day' : 'days'} · {overall.restDays} rest{' '}
-                  {overall.restDays === 1 ? 'day' : 'days'}. One missed day doesn’t erase your progress: keep going.
+                  {overall.restDays === 1 ? 'day' : 'days'}. One missed day won't undo your progress.
                 </p>
               </Card>
             );

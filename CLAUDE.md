@@ -39,6 +39,9 @@ features, setup and the Android release process.
   -> `DayflowSpeakService`, text-to-speech), synced with `syncSpeech` next to
   the ring sync in `pushNativeSchedule`; rules in `lib/spokenReminders.ts`. The
   test notification uses id 2147483647, which the task sync never owns.
+- UI copy: a hint or empty-state line is one sentence of about 12 words.
+  Edge cases go in the confirm dialog or a collapsed "How it works" section,
+  not on the screen. Warnings may be longer, but must still say what is lost.
 
 ## Rules that will bite if broken
 

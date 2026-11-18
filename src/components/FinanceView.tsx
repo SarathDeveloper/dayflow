@@ -1512,7 +1512,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
             {monthCategoryBudgets.length === 0 && !addingCatBudget ? (
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Set per-category limits (e.g. Food ₹8,000, Transport ₹2,000) to see which categories are over budget.
+                Set category limits to see where you're over budget.
               </p>
             ) : (
               <div className="space-y-2.5">
@@ -1926,7 +1926,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                     No bill templates yet
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-xs mx-auto">
-                    Create a template for each recurring bill (Electricity, Rent, Internet, Phone) and we'll auto-generate a bill every month to tick as paid.
+                    Add a bill once (rent, phone…) and it repeats every month.
                   </p>
                   <div className="mt-4 flex justify-center">
                     <Button variant="primary" size="sm" onClick={onAddBillTemplate}>
@@ -1951,7 +1951,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 <span>Savings Habit</span>
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Move money into savings, gold, or stocks. A day counts when new money lands there.
+                A day counts when new money lands in savings, gold or stocks.
               </p>
             </div>
             <Button variant="primary" size="sm" onClick={onAddSavings}>
@@ -2021,7 +2021,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
           ) : (
             <Card className="p-4">
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Add a savings, gold, or stocks account in the ledger before logging a save. The balance is in rupees.
+                Add a savings, gold or stocks account in the ledger first.
               </p>
             </Card>
           )}
@@ -2082,7 +2082,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               })}
             </div>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2">
-              Today's square is highlighted with a ring. Moving money between savings accounts does not fill a day.
+              Ring = today. Moves between savings accounts don't count.
             </p>
           </Card>
 
@@ -2199,7 +2199,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 No savings logged for {monthLabel(selectedMonth)}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-xs mx-auto">
-                Move rupees into a savings, gold, or stocks account. Even ₹50 counts and keeps your streak alive.
+                Move any amount into savings, gold or stocks. Even ₹50 keeps your streak.
               </p>
             </div>
           )}

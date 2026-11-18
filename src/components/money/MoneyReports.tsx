@@ -190,7 +190,7 @@ export function MoneyReports({ transactions, accounts, debts, billPayments, toda
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">Cancel what you no longer use, or add the rest as Bills so they show up in your forecast.</p>
+            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">Cancel unused ones, or add the rest as Bills for your forecast.</p>
           </>
         )}
       </Card>

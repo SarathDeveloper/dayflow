@@ -270,8 +270,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
           <Wallet className="w-9 h-9 mx-auto mb-2 opacity-90" />
           <h2 className="text-base font-black">Set up your money ledger</h2>
           <p className="text-xs text-indigo-100 mt-1 max-w-xs mx-auto">
-            Add your cash wallet and bank accounts with their opening balances. Every
-            income, expense and transfer is then tracked against the right account.
+            Add your cash and bank accounts with their balances to start.
           </p>
           <div className="mt-4 flex flex-col sm:flex-row gap-2 justify-center">
             <button
