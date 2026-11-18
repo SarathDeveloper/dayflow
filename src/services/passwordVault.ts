@@ -256,6 +256,26 @@ async function syncOnce(): Promise<VaultSyncResult> {
 }
 
 /**
+ * At sign-out: sync, then remove this device's vault copy (it holds the key)
+ * if the server has every change. Unsynced changes keep the copy until the
+ * same account signs in again.
+ */
+export async function forgetSyncedVault(): Promise<void> {
+  if (!hasPasswordVault()) return;
+  await syncPasswordVault();
+  const text = await readVaultStore();
+  let stored: ReturnType<typeof parseStoredVault>;
+  try {
+    stored = parseStoredVault(text);
+  } catch {
+    return;
+  }
+  if (stored.kind === 'synced' && stored.state.ownerId && stored.state.dirty.length === 0) {
+    await writeVaultStore('', text);
+  }
+}
+
+/**
  * Removes this device's vault copy (after a conflict or account change, once
  * the person saved a backup), then syncs so the account's vault comes down.
  */

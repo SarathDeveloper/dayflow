@@ -3,6 +3,31 @@ import { argon2idAsync } from '@noble/hashes/argon2.js';
 export const MIN_VAULT_PASSPHRASE = 15;
 export const MAX_VAULT_FILE = 2 * 1024 * 1024;
 
+/** What a vault item holds. Missing means `login` (every item saved before kinds existed). */
+export type VaultItemKind = 'login' | 'card' | 'wifi' | 'note';
+export const VAULT_ITEM_KINDS: readonly VaultItemKind[] = ['login', 'card', 'wifi', 'note'];
+
+export interface VaultCard {
+  holder: string;
+  number: string;
+  /** MM/YY as typed. */
+  expiry: string;
+  cvv: string;
+}
+
+export interface PasswordHistoryItem {
+  password: string;
+  /** When this password was replaced. */
+  changedAt: string;
+}
+
+export const MAX_PASSWORD_HISTORY = 5;
+
+/**
+ * One vault item. The optional fields are left out when unset, so items saved
+ * before they existed (and v1 backups) read back unchanged. A Wi-Fi item keeps
+ * the network name in `username`.
+ */
 export interface VaultEntry {
   id: string;
   title: string;
@@ -10,6 +35,17 @@ export interface VaultEntry {
   username: string;
   password: string;
   notes: string;
+  kind?: VaultItemKind;
+  category?: string;
+  favorite?: boolean;
+  /** 2FA secret: base32, or an otpauth:// URI. */
+  totp?: string;
+  card?: VaultCard;
+  /** Earlier passwords, newest first. */
+  history?: PasswordHistoryItem[];
+  passwordChangedAt?: string;
+  /** In the trash since then; deleted for good after 30 days. */
+  trashedAt?: string;
 }
 
 interface SealedValue {
@@ -92,20 +128,94 @@ export function readVaultFile(text: string): VaultFile {
   };
 }
 
+function isText(value: unknown, limit: number): value is string {
+  return typeof value === 'string' && value.length <= limit;
+}
+
+function isTime(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+}
+
+/** Kinds that must carry a password. */
+export function needsPassword(kind: VaultItemKind | undefined): boolean {
+  return kind === undefined || kind === 'login' || kind === 'wifi';
+}
+
+function isCard(value: unknown): value is VaultCard {
+  return isObject(value) && isText(value.holder, 200) && isText(value.number, 40) &&
+    isText(value.expiry, 10) && isText(value.cvv, 8);
+}
+
+function isHistory(value: unknown): value is PasswordHistoryItem[] {
+  return Array.isArray(value) && value.length <= MAX_PASSWORD_HISTORY &&
+    value.every((item) => isObject(item) && isText(item.password, fieldLimits.password) && Boolean(item.password) && isTime(item.changedAt));
+}
+
 function isEntry(value: unknown): value is VaultEntry {
-  return isObject(value) && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 64 &&
-    Object.entries(fieldLimits).every(([field, limit]) =>
-      typeof value[field] === 'string' && value[field].length <= limit,
-    ) && Boolean(value.title) && Boolean(value.password);
+  if (!isObject(value) || typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 64) return false;
+  if (!Object.entries(fieldLimits).every(([field, limit]) => isText(value[field], limit))) return false;
+  if (value.kind !== undefined && !VAULT_ITEM_KINDS.includes(value.kind as VaultItemKind)) return false;
+  const kind = value.kind as VaultItemKind | undefined;
+  return Boolean(value.title) && (!needsPassword(kind) || Boolean(value.password)) &&
+    (value.category === undefined || isText(value.category, 40)) &&
+    (value.favorite === undefined || typeof value.favorite === 'boolean') &&
+    (value.totp === undefined || isText(value.totp, 512)) &&
+    (value.card === undefined || isCard(value.card)) &&
+    (value.history === undefined || isHistory(value.history)) &&
+    (value.passwordChangedAt === undefined || isTime(value.passwordChangedAt)) &&
+    (value.trashedAt === undefined || isTime(value.trashedAt));
+}
+
+/** Known fields only, optional ones only when set, so stored items carry nothing extra. */
+function cleanEntry(entry: VaultEntry): VaultEntry {
+  const { id, title, website, username, password, notes } = entry;
+  const clean: VaultEntry = { id, title, website, username, password, notes };
+  if (entry.kind && entry.kind !== 'login') clean.kind = entry.kind;
+  if (entry.category) clean.category = entry.category;
+  if (entry.favorite) clean.favorite = true;
+  if (entry.totp) clean.totp = entry.totp;
+  if (entry.card) {
+    const { holder, number, expiry, cvv } = entry.card;
+    clean.card = { holder, number, expiry, cvv };
+  }
+  if (entry.history?.length) {
+    clean.history = entry.history.map(({ password: old, changedAt }) => ({ password: old, changedAt }));
+  }
+  if (entry.passwordChangedAt) clean.passwordChangedAt = entry.passwordChangedAt;
+  if (entry.trashedAt) clean.trashedAt = entry.trashedAt;
+  return clean;
 }
 
 function readEntries(value: unknown): VaultEntry[] {
   if (!Array.isArray(value) || !value.every(isEntry) || new Set(value.map((entry) => entry.id)).size !== value.length) {
     throw new Error('The vault entries are damaged.');
   }
-  return value.map(({ id, title, website, username, password, notes }) =>
-    ({ id, title, website, username, password, notes }),
-  );
+  return value.map(cleanEntry);
+}
+
+/** Validates one item before it is saved; throws a message a person can act on. */
+export function checkVaultEntry(entry: VaultEntry): VaultEntry {
+  if (!entry.title.trim()) throw new Error('Enter a title.');
+  if (needsPassword(entry.kind) && !entry.password) {
+    throw new Error(entry.kind === 'wifi' ? 'Enter the Wi-Fi password.' : 'Enter a password.');
+  }
+  if (!isEntry(entry)) throw new Error('One of the fields is too long.');
+  return cleanEntry(entry);
+}
+
+/**
+ * The item as saved after an edit: a changed password moves the old one into
+ * the history (newest first, at most five) and restarts its age.
+ */
+export function applyEntryEdit(previous: VaultEntry | undefined, next: VaultEntry, now: string): VaultEntry {
+  if (!previous) return { ...next, passwordChangedAt: next.password ? now : undefined };
+  if (previous.password === next.password) return next;
+  const history = previous.password
+    ? [{ password: previous.password, changedAt: now }, ...(previous.history ?? [])]
+      .filter((item) => item.password !== next.password)
+      .slice(0, MAX_PASSWORD_HISTORY)
+    : previous.history;
+  return { ...next, history: history?.length ? history : undefined, passwordChangedAt: next.password ? now : undefined };
 }
 
 async function passphraseKey(passphrase: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
@@ -202,12 +312,26 @@ export async function sealEntries(id: string, key: CryptoKey, entries: VaultEntr
  * key, so the login records stay valid on every device.
  */
 
+/**
+ * The vault's key holder. Two modes:
+ * - account (current): `key` is the data key itself, kept with the signed-in
+ *   account. No passphrase; the server could read it (not end-to-end).
+ * - passphrase (older vaults): `salt` + `wrappedKey`, the data key wrapped
+ *   with an argon2id key from a passphrase. Converted to account mode once
+ *   the passphrase is entered.
+ */
 export interface VaultHeader {
   /** Same random id as a v1 file, so a migrated vault keeps its key bindings. */
   vaultId: string;
-  salt: string;
-  wrappedKey: SealedValue;
+  salt?: string;
+  wrappedKey?: SealedValue;
+  /** Base64 data key (account mode). */
+  key?: string;
   updatedAt: string;
+}
+
+export function isAccountHeader(header: VaultHeader): header is VaultHeader & { key: string } {
+  return typeof header.key === 'string';
 }
 
 /** One login, encrypted. The row id and `updatedAt` are bound as AES-GCM additional data. */
@@ -232,8 +356,9 @@ function isIsoTime(value: unknown): value is string {
 }
 
 export function isVaultHeader(value: unknown): value is VaultHeader {
-  return isObject(value) && isBase64(value.vaultId, 16) && isBase64(value.salt, 16) &&
-    isSealed(value.wrappedKey, 48) && isIsoTime(value.updatedAt);
+  if (!isObject(value) || !isBase64(value.vaultId, 16) || !isIsoTime(value.updatedAt)) return false;
+  if (value.key !== undefined) return isBase64(value.key, 32) && value.salt === undefined && value.wrappedKey === undefined;
+  return isBase64(value.salt, 16) && isSealed(value.wrappedKey, 48);
 }
 
 export function isVaultRecord(value: unknown): value is VaultRecord {
@@ -243,12 +368,45 @@ export function isVaultRecord(value: unknown): value is VaultRecord {
 
 /** Copies only the known fields, so stored or pulled objects cannot carry extras. */
 export function cleanHeader(header: VaultHeader): VaultHeader {
+  if (isAccountHeader(header)) return { vaultId: header.vaultId, key: header.key, updatedAt: header.updatedAt };
   return {
     vaultId: header.vaultId,
     salt: header.salt,
-    wrappedKey: { nonce: header.wrappedKey.nonce, ciphertext: header.wrappedKey.ciphertext },
+    wrappedKey: header.wrappedKey && { nonce: header.wrappedKey.nonce, ciphertext: header.wrappedKey.ciphertext },
     updatedAt: header.updatedAt,
   };
+}
+
+/** A new, empty account-mode vault: a fresh random data key, no passphrase. */
+export async function createAccountVault(now: string) {
+  const vaultId = encode(crypto.getRandomValues(new Uint8Array(16)));
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    return { header: { vaultId, key: encode(rawKey), updatedAt: now } as VaultHeader, key: await importKey(rawKey) };
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
+/** The account-mode header for an existing vault's data key (converting a passphrase vault). */
+export function accountHeader(vaultId: string, rawKey: Uint8Array, now: string): VaultHeader {
+  if (rawKey.length !== 32) throw new Error('The vault key is damaged.');
+  return { vaultId, key: encode(rawKey), updatedAt: now };
+}
+
+/** Raw data key bytes of an account-mode header (for fingerprint / passkey wrapping). Caller zeroes them. */
+export function accountKeyBytes(header: VaultHeader): Uint8Array<ArrayBuffer> {
+  if (!isAccountHeader(header)) throw new Error('This vault still needs its passphrase.');
+  return decode(header.key);
+}
+
+export async function openAccountVault(header: VaultHeader): Promise<CryptoKey> {
+  const raw = accountKeyBytes(header);
+  try {
+    return await importKey(raw);
+  } finally {
+    raw.fill(0);
+  }
 }
 
 export function cleanRecord(record: VaultRecord): VaultRecord {
@@ -265,6 +423,7 @@ async function wrapNewKey(passphrase: string, vaultId: string, rawKey: Uint8Arra
 }
 
 async function unwrapRawKey(header: Pick<VaultHeader, 'vaultId' | 'salt' | 'wrappedKey'>, passphrase: string) {
+  if (!header.salt || !header.wrappedKey) throw new Error('This vault has no passphrase.');
   const wrappingKey = await passphraseKey(passphrase, decode(header.salt));
   try {
     return await unseal(wrappingKey, header.wrappedKey, context(header.vaultId, 'key'));
@@ -291,6 +450,25 @@ export async function unlockVaultHeader(header: VaultHeader, passphrase: string)
     return await importKey(rawKey);
   } finally {
     rawKey.fill(0);
+  }
+}
+
+/**
+ * The raw data key, for wrapping it a second time under the fingerprint
+ * (Android Keystore) or a passkey (WebAuthn PRF). Needs the passphrase. The
+ * caller must `fill(0)` the bytes once wrapped.
+ */
+export function vaultKeyBytes(header: VaultHeader, passphrase: string): Promise<Uint8Array<ArrayBuffer>> {
+  return unwrapRawKey(header, passphrase);
+}
+
+/** Imports raw key bytes released by the fingerprint or a passkey. Zeroes them. */
+export async function importVaultKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  try {
+    if (raw.length !== 32) throw new Error('The saved unlock key is damaged.');
+    return await importKey(raw);
+  } finally {
+    raw.fill(0);
   }
 }
 
@@ -340,6 +518,7 @@ export async function migrateVaultFile(file: VaultFile, passphrase: string, now:
 
 /** A v1 backup file (the format every app version restores) from an unlocked v2 vault. */
 export async function exportVaultFile(header: VaultHeader, key: CryptoKey, entries: VaultEntry[]): Promise<VaultFile> {
+  if (!header.salt || !header.wrappedKey) throw new Error('Choose a backup password to save a backup.');
   return {
     format: 'dayflow-password-vault',
     version: 1,

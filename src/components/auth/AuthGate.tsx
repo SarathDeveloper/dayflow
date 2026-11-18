@@ -1,14 +1,10 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { App as CapApp } from '@capacitor/app';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRightLeft, KeyRound, Loader2, LogOut } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useAuthGate } from '../../hooks/useAuthGate';
 import { updatePassword } from '../../services/cloudSyncService';
 import { AuthScreen, MIN_PASSWORD_LENGTH } from './AuthScreen';
 import { AuthShell, authInputClass } from './AuthShell';
-import { hasPasswordVault } from '../../services/passwordVault';
-
-const PasswordVaultView = lazy(() => import('../PasswordVaultView'));
 
 interface AuthGateProps {
   /** Renders the app. `justSignedIn` is true when the person typed their password moments ago. */
@@ -41,24 +37,9 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
   return <>{children({ justSignedIn: sawGate.current })}</>;
 };
 
+/** The password vault is tied to the account (no passphrase), so it opens only after sign-in. */
 function SignedOutScreen() {
-  const [vaultOpen, setVaultOpen] = useState(false);
-  useEffect(() => {
-    if (!vaultOpen) return;
-    const listener = CapApp.addListener('backButton', () => setVaultOpen(false));
-    return () => { void listener.then((handle) => handle.remove()).catch(() => {}); };
-  }, [vaultOpen]);
-
-  if (!vaultOpen) {
-    return <AuthScreen onOpenVault={hasPasswordVault() ? () => setVaultOpen(true) : undefined} />;
-  }
-  return (
-    <main className="min-h-dvh bg-stone-50 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <Suspense fallback={<p role="status">Loading vault…</p>}>
-        <PasswordVaultView onExit={() => setVaultOpen(false)} />
-      </Suspense>
-    </main>
-  );
+  return <AuthScreen />;
 }
 
 const ConfirmSwitchScreen: React.FC<{

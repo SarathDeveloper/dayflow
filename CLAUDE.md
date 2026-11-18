@@ -68,15 +68,23 @@ features, setup and the Android release process.
   the chime. A new collection that should sync must be added to
   `SyncData` in `lib/persistence.ts`, `RECORD_COLLECTIONS` in
   `lib/cloudRecords.ts` and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
-- **The password vault syncs itself, end-to-end encrypted.** It is not in
-  `SyncData`: `services/passwordVault.ts` pulls and pushes its own rows
-  (collection `passwordVault`: header `__vault`, one `vault-<id>` row per login)
-  and the main sync ignores rows of collections it does not know
-  (`isForeignRow` in `lib/cloudRecords.ts`). Only ciphertext leaves the device;
-  each login's row id and `updatedAt` are bound into its encryption
-  (`lib/passwordVault.ts`). Local copy: Android plugin file, website
-  localStorage `dayflow_password_vault_v2`. A pre-sync Android file (v1) is
-  converted on first unlock; backups stay in the v1 format.
+- **The password vault syncs itself and has no passphrase (account key).** It
+  is not in `SyncData`: `services/passwordVault.ts` pulls and pushes its own
+  rows (collection `passwordVault`: header `__vault`, one `vault-<id>` row per
+  item) and the main sync ignores rows of collections it does not know
+  (`isForeignRow` in `lib/cloudRecords.ts`). Items are AES-GCM encrypted with
+  their row id and `updatedAt` bound in (`lib/passwordVault.ts`), but the data
+  key itself rides in the `__vault` header (`key`), so the server could read it:
+  this is a product choice, not end-to-end. Older passphrase headers
+  (`salt` + `wrappedKey`, and the pre-sync v1 Android file) convert once the
+  passphrase is entered. The vault opens only when signed in; sign-out removes
+  the device copy once synced. Backup files are v1 files locked with a password
+  chosen at export. Local copy: Android plugin file, website localStorage
+  `dayflow_password_vault_v2`.
+- **Vault "ask for fingerprint" is device-only:** Android Keystore key + file
+  `password-vault-bio.v1`, website passkey (WebAuthn PRF) in
+  `dayflow_vault_passkey_v1`, prefs (auto-lock, last backup) in
+  `dayflow_vault_prefs_v1`. Never sync or back these up.
 - **Notification ids: tasks/habits use ids >= 0, document and maintenance
   reminders use ids < 0** (`lib/extraReminders.ts`). Each sync and cancel-all only
   touches its own range; keep it that way or one feature cancels the other's alarms.

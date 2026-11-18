@@ -48,7 +48,7 @@ import {
   type CloudCheckStep,
 } from '../services/cloudSyncService';
 import { clearHomeWidgets } from '../services/homeWidgets';
-import { hasPasswordVault, syncPasswordVault } from '../services/passwordVault';
+import { forgetSyncedVault, hasPasswordVault, syncPasswordVault } from '../services/passwordVault';
 
 export type CloudSyncStatus = 'unconfigured' | 'disconnected' | 'idle' | 'syncing' | 'error';
 
@@ -369,6 +369,8 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     try {
       // Home-screen widgets would keep showing tasks and spending.
       await clearHomeWidgets().catch(() => {});
+      // The vault's key sits with its copy on this device: remove both once synced.
+      await forgetSyncedVault().catch(() => {});
       await signOutRequest();
     } finally {
       signingOutRef.current = false;
