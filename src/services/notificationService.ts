@@ -44,6 +44,10 @@ export class NotificationService {
     // Play the in-app chime when audible (quiet hours silence it).
     if (settings.soundEnabled && !quiet && task.reminder.sound) {
       audioService.playSound(task.reminder.sound, task.title);
+      // "Voice announcements": read the title after the chosen chime.
+      if (settings.speechEnabled && task.reminder.sound !== 'voice') {
+        window.setTimeout(() => audioService.playSound('voice', task.title), 900);
+      }
     }
 
     if (

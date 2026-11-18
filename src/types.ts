@@ -85,7 +85,7 @@ export interface NotificationSettings {
   };
 }
 
-export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents';
+export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents' | 'notifications';
 
 export type GoalStatus = 'active' | 'paused' | 'completed';
 

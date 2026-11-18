@@ -34,7 +34,11 @@ features, setup and the Android release process.
 - Supabase is reached through the site's `/supabase` proxy (`vercel.json`),
   because some Indian networks block `*.supabase.co`.
 - `android/.../dailytasks/`: native alarms (`AlarmScheduler`, ring service and
-  screen, boot receiver) and home-screen widgets.
+  screen, boot receiver) and home-screen widgets. Spoken reminders ("Voice"
+  sound or "Voice announcements") are separate exact alarms (`SpeechScheduler`
+  -> `DayflowSpeakService`, text-to-speech), synced with `syncSpeech` next to
+  the ring sync in `pushNativeSchedule`; rules in `lib/spokenReminders.ts`. The
+  test notification uses id 2147483647, which the task sync never owns.
 
 ## Rules that will bite if broken
 

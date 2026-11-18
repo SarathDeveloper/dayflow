@@ -6,4 +6,7 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Live reload: plain http to the dev server on localhost / 10.0.2.2 only. -->
+    <application android:networkSecurityConfig="@xml/network_security_config" />
 </manifest>

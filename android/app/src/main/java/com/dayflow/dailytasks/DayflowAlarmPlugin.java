@@ -158,6 +158,84 @@ public class DayflowAlarmPlugin extends Plugin {
         }
     }
 
+    /** Replaces the spoken-reminder schedule: [{id, notificationId, at, text}]. */
+    @PluginMethod
+    public void syncSpeech(PluginCall call) {
+        try {
+            JSArray plans = call.getArray("plans");
+            SpeechScheduler.replace(getContext(), plans == null ? new JSONArray() : plans);
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("Could not update spoken reminders", error);
+        }
+    }
+
+    /** Reads `text` aloud now, even on silent (the "Test voice" button). */
+    @PluginMethod
+    public void speak(PluginCall call) {
+        String text = call.getString("text");
+        if (text == null || text.trim().isEmpty()) {
+            call.reject("empty");
+            return;
+        }
+        DayflowSpeakService.start(getContext(), text.trim(), true);
+        call.resolve();
+    }
+
+    /**
+     * Whether Android lets this app run its alarms in the background. False means
+     * battery optimisation is on, which on many phones (Xiaomi, Vivo, Oppo, Realme,
+     * OnePlus, Samsung "sleeping apps") deletes reminders once the app is swiped away.
+     */
+    @PluginMethod
+    public void getBatteryStatus(PluginCall call) {
+        JSObject result = new JSObject();
+        boolean unrestricted = true;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            android.os.PowerManager power = (android.os.PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+            unrestricted = power == null || power.isIgnoringBatteryOptimizations(getContext().getPackageName());
+        }
+        result.put("unrestricted", unrestricted);
+        result.put("manufacturer", android.os.Build.MANUFACTURER == null ? "" : android.os.Build.MANUFACTURER);
+        call.resolve(result);
+    }
+
+    /** Opens this app's system page, where Battery / Autostart live on every brand. */
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+        startSettings(call, intent);
+    }
+
+    /** Opens this app's notification settings (channels, sound, lock screen). */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        Intent intent;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            intent = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            intent.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        } else {
+            intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+        }
+        startSettings(call, intent);
+    }
+
+    private void startSettings(PluginCall call, Intent intent) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            call.reject("Could not open settings");
+            return;
+        }
+        try {
+            activity.startActivity(intent);
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("Could not open settings", error);
+        }
+    }
+
     @PluginMethod
     public void shareBackup(PluginCall call) {
         String contents = call.getString("contents");

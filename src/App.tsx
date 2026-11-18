@@ -97,11 +97,11 @@ import {
   cancelAllExtraReminders,
   cancelAllTaskReminders,
   ensureNotificationSetup,
-  getNativePermissionStatus,
   registerReminderListeners,
   requestExactAlarmPermission,
   syncExtraReminders,
   syncScheduledNotifications,
+  readNotificationStatus,
   type NotificationSetupResult,
 } from './services/nativeNotificationService';
 import { buildExtraReminderPlans, DOCUMENTS_ROUTE, maintenanceIdFromRoute } from './lib/extraReminders';
@@ -181,6 +181,8 @@ import { canSetCheckIn, habitBlockReason, isComplete, isDueToday, isScheduledOn,
 import { useCloudSync } from './hooks/useCloudSync';
 import { useAppUpdates } from './hooks/useAppUpdates';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
+import { NotificationsView } from './components/NotificationsView';
+import { buildSpokenReminderPlans } from './lib/spokenReminders';
 
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
 const PasswordVaultView = lazy(() => import('./components/PasswordVaultView'));
@@ -514,6 +516,17 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
   // Native reminder state (Android only).
   const [nativeSetup, setNativeSetup] = useState<NotificationSetupResult | null>(null);
+  /** False while Android battery optimisation can delete reminders (null: unknown / not Android). */
+  const [batteryUnrestricted, setBatteryUnrestricted] = useState<boolean | null>(null);
+  const refreshBatteryStatus = useCallback(async () => {
+    if (!isNativeAndroid()) return;
+    try {
+      const { unrestricted } = await DayflowAlarm.getBatteryStatus();
+      setBatteryUnrestricted(unrestricted);
+    } catch (e) {
+      console.warn('Could not read battery status:', e);
+    }
+  }, []);
   const [reminderNoticeDismissed, setReminderNoticeDismissed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(REMINDER_NOTICE_DISMISSED_KEY) === '1';
@@ -874,6 +887,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         if (cancelled) return;
         setNativeSetup(result);
         setPermissionStatus(result.granted ? 'granted' : 'denied');
+        void refreshBatteryStatus();
 
         removeListeners = await registerReminderListeners({
           onDue: (taskId) => {
@@ -1024,6 +1038,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
     void DayflowAlarm.sync({ plans: upcomingRings(plans, alarmsRef.current, new Date(), ready) }).catch((e) => {
       console.warn('Failed to sync ringing alarms:', e);
     });
+    void DayflowAlarm.syncSpeech({ plans: buildSpokenReminderPlans(plans, settingsRef.current, Date.now()) }).catch((e) => {
+      console.warn('Failed to sync spoken reminders:', e);
+    });
   }, []);
 
   // Reconcile the phone's alarms whenever tasks or reminder settings change.
@@ -1162,10 +1179,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
         void unlockAppRef.current();
       }
       void (async () => {
-        const status = await getNativePermissionStatus();
-        const granted = status === 'granted';
+        const current = await readNotificationStatus();
+        const granted = current.granted;
         setPermissionStatus(granted ? 'granted' : 'denied');
-        setNativeSetup((prev) => (prev ? { ...prev, granted } : prev));
+        setNativeSetup((prev) => (prev ? current : prev));
+        void refreshBatteryStatus();
         pushNativeSchedule(granted);
         pushExtraReminders(granted);
         try {
@@ -3533,11 +3551,13 @@ export default function App({ skipInitialLock = false }: AppProps) {
             ? {
                 permissionGranted: nativeSetup.granted,
                 exactAlarm: nativeSetup.exactAlarm,
+                batteryRestricted: batteryUnrestricted === false,
               }
             : null
         }
         onRequestPermission={() => void handleRequestPermission()}
         onOpenExactAlarmSettings={handleOpenExactAlarmSettings}
+        onOpenNotificationsPage={() => setActiveTab('notifications')}
         onDismiss={dismissReminderNotice}
       />
     ) : null;
@@ -3640,7 +3660,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         permissionStatus={permissionStatus}
         theme={theme}
         onToggleTheme={handleToggleTheme}
-        onRequestPermission={handleRequestPermission}
+        onRequestPermission={() => setActiveTab('notifications')}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenMenu={openMenu}
         isMenuOpen={isMenuOpen}
@@ -4091,6 +4111,28 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onDeleteHabit={handleDeleteHabit}
             onOpenGoals={() => setActiveTab('goals')}
             onRegisterClose={registerHabitClose}
+          />
+        )}
+
+        {activeTab === 'notifications' && (
+          <NotificationsView
+            settings={settings}
+            nativeSetup={nativeSetup}
+            batteryUnrestricted={batteryUnrestricted}
+            webPermission={permissionStatus}
+            tasks={tasks}
+            habits={habits}
+            habitCheckIns={habitCheckIns}
+            goals={goals}
+            songIds={songIds}
+            onRequestPermission={() => void handleRequestPermission()}
+            onOpenExactAlarmSettings={handleOpenExactAlarmSettings}
+            onStatusChange={(status) => {
+              setNativeSetup(status);
+              setPermissionStatus(status.granted ? 'granted' : 'denied');
+            }}
+            onRefreshBattery={refreshBatteryStatus}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
 

@@ -18,6 +18,7 @@ public class DayflowBootReceiver extends BroadcastReceiver {
         switch (intent.getAction()) {
             case Intent.ACTION_TIMEZONE_CHANGED:
                 AlarmScheduler.restoreAfterTimezoneChange(context);
+                SpeechScheduler.restore(context);
                 break;
             case Intent.ACTION_BOOT_COMPLETED:
             case Intent.ACTION_MY_PACKAGE_REPLACED:
@@ -26,6 +27,7 @@ public class DayflowBootReceiver extends BroadcastReceiver {
                 // Same request codes, so this replaces rather than duplicates. After the
                 // exact-alarm grant it also upgrades any inexact fallback to exact.
                 AlarmScheduler.restore(context);
+                SpeechScheduler.restore(context);
                 break;
             default:
                 break;

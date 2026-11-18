@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   AlarmClock,
+  Bell,
   BookOpen,
   Calendar,
   CalendarDays,
@@ -46,6 +47,7 @@ function navSections(): NavSection[] {
         { id: 'timeline', label: 'Timeline', icon: Clock },
         { id: 'focus', label: 'Focus', icon: Zap },
         { id: 'alarms', label: 'Alarms', icon: AlarmClock },
+        { id: 'notifications', label: 'Notifications', icon: Bell },
       ],
     },
     {

@@ -37,19 +37,26 @@ const EXTRA_GROUP_KEY = 'dayflow-extra-reminders';
 const SMALL_ICON = 'ic_stat_icon';
 const ICON_COLOR = '#4f46e5';
 
+/** Vibrates without a chime; the native speech service reads the reminder aloud. */
+const VOICE_CHANNEL = 'reminders_voice';
+/** Above every task id (`reserveNotificationId` stays below 2147483647), so no sync cancels it. */
+export const TEST_NOTIFICATION_ID = 2147483647;
+
 /**
  * Maps a task's chime choice to the matching native channel.
- * `voice` falls back to the chime channel: Android notification channels cannot
- * run text-to-speech, and the in-app banner still announces the task.
+ * `voice` uses the voice channel (vibration, no chime) while
+ * `DayflowSpeakService` reads the title aloud; `music` without a ring uses the chime.
  */
-function channelIdForSound(sound: SoundType, settings: NotificationSettings): string {
+export function channelIdForSound(sound: SoundType, settings: NotificationSettings): string {
   if (!settings.soundEnabled) return SILENT_CHANNEL;
-  const resolved: SoundType = sound === 'voice' || sound === 'music' ? 'chime' : sound;
+  if (sound === 'voice') return VOICE_CHANNEL;
+  const resolved: SoundType = sound === 'music' ? 'chime' : sound;
   return `${CHANNEL_PREFIX}${resolved}`;
 }
 
 async function createChannels(): Promise<void> {
   const defs: { id: string; name: string; sound?: string; vibration: boolean; description: string }[] = [
+    { id: VOICE_CHANNEL, name: 'Reminders - Voice', sound: 'silent.wav', vibration: true, description: 'Reads the reminder aloud' },
     { id: 'reminders_chime', name: 'Reminders - Chime', sound: 'chime.wav', vibration: true, description: 'Gentle two-note chime' },
     { id: 'reminders_bell', name: 'Reminders - Bell', sound: 'bell.wav', vibration: true, description: 'Harmonic three-note bell' },
     { id: 'reminders_digital', name: 'Reminders - Digital', sound: 'digital.wav', vibration: true, description: 'Short digital triple beep' },
@@ -150,9 +157,48 @@ function pendingToMs(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Current permission and exact-alarm state, without asking for anything.
+ * The Notifications page reads it again when the user comes back from settings.
+ */
+export async function readNotificationStatus(): Promise<NotificationSetupResult> {
+  if (!isNativeAndroid()) return { granted: false, exactAlarm: 'unsupported' };
+  return {
+    granted: (await getNativePermissionStatus()) === 'granted',
+    exactAlarm: await checkExactAlarmSetting(),
+  };
+}
+
+/**
+ * Posts a test reminder `delayMs` from now with the default sound's channel, so
+ * the user can close the app and watch it reach the notification drawer.
+ */
+export async function sendTestNotification(settings: NotificationSettings, delayMs: number): Promise<void> {
+  if (!isNativeAndroid()) return;
+  await createChannels();
+  const exactAllowed = (await checkExactAlarmSetting()) === 'granted';
+  await LocalNotifications.schedule({
+    notifications: [
+      {
+        id: TEST_NOTIFICATION_ID,
+        title: 'Test reminder',
+        body: 'Reminders reach your notification drawer.',
+        schedule: { at: new Date(Date.now() + delayMs), allowWhileIdle: true },
+        isExactNotification: exactAllowed,
+        isExactMandatory: false,
+        channelId: channelIdForSound(settings.defaultSound, settings),
+        smallIcon: SMALL_ICON,
+        iconColor: ICON_COLOR,
+        autoCancel: true,
+        foreground: true,
+      },
+    ],
+  });
+}
+
 /** Task and habit reminders own ids >= 0; document and maintenance reminders own ids < 0. */
 function isTaskReminderId(id: number): boolean {
-  return id >= 0;
+  return id >= 0 && id !== TEST_NOTIFICATION_ID;
 }
 
 function isExtraReminderId(id: number): boolean {

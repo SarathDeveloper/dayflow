@@ -1,4 +1,5 @@
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import type { SpokenReminderPlan } from '../lib/spokenReminders';
 
 export interface NativeRingPlan {
   id: string;
@@ -43,6 +44,16 @@ interface DayflowAlarmPlugin {
   preview(options: { sound: string }): Promise<void>;
   stopPreview(): Promise<void>;
   sync(options: { plans: NativeRingPlan[] }): Promise<void>;
+  /** Replaces the spoken-reminder schedule (read aloud with text-to-speech, app open or closed). */
+  syncSpeech(options: { plans: SpokenReminderPlan[] }): Promise<void>;
+  /** Reads `text` aloud now, even on silent. */
+  speak(options: { text: string }): Promise<void>;
+  /** `unrestricted` is false while Android battery optimisation can stop reminders. */
+  getBatteryStatus(): Promise<{ unrestricted: boolean; manufacturer: string }>;
+  /** This app's system page (Battery, Autostart, Notifications). */
+  openAppSettings(): Promise<void>;
+  /** This app's notification settings. */
+  openNotificationSettings(): Promise<void>;
   consumeEvents(): Promise<{ events: AlarmEvent[] }>;
   /** Open the Android share sheet for a text file (a JSON backup by default). The file stays in app cache. */
   shareBackup(options: {
