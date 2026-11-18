@@ -9,4 +9,12 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="dayflow_bank_sms.xml" />
     <exclude domain="sharedpref" path="dayflow_widgets.xml" />
+    <!-- Device-only data (see CLAUDE.md). Alarm songs stay on the phone they were picked on;
+         a missing song falls back to the oldest song, then the chime. -->
+    <exclude domain="file" path="songs" />
+    <exclude domain="file" path="reminder-music" />
+    <!-- WebView storage holds the daily plan, app-lock flag, document reminder schedule
+         and the sign-in session. Everything else in it syncs: after a restore the user
+         signs in and cloud sync brings the data back. -->
+    <exclude domain="root" path="app_webview" />
 </full-backup-content>

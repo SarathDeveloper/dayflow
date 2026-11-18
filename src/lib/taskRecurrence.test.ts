@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../types';
-import { isRecurring, nextOccurrenceOf, rescheduled, skipOccurrence } from './taskRecurrence';
+import { isRecurring, nextOccurrence, nextOccurrenceId, nextOccurrenceOf, rescheduled, skipOccurrence } from './taskRecurrence';
 
 const NOW = '2026-11-03T10:00:00.000Z';
 
@@ -59,5 +59,25 @@ describe('rescheduled', () => {
   it('knows which tasks repeat', () => {
     expect(isRecurring(task({}))).toBe(false);
     expect(isRecurring(task({ recurrence: { type: 'monthly' } }))).toBe(true);
+  });
+});
+
+describe('nextOccurrence', () => {
+  it('gives the next copy an id from its series and date, the same on every device', () => {
+    const first = task({ id: 'task-1795001593674-ab12cd34', recurrence: { type: 'daily' }, completed: true });
+    const onPhone = nextOccurrence(first, '2026-11-04', NOW);
+    const onLaptop = nextOccurrence(first, '2026-11-04', '2026-11-03T11:30:00.000Z');
+    expect(onPhone.id).toBe('task-1795001593674-ab12cd34-on-2026-11-04');
+    expect(onLaptop.id).toBe(onPhone.id);
+    expect(onPhone).toMatchObject({ seriesId: first.id, date: '2026-11-04', completed: false, createdAt: NOW, updatedAt: NOW });
+  });
+
+  it('keeps the series id down the chain, so ids do not grow', () => {
+    const first = task({ id: 'task-9', recurrence: { type: 'daily' } });
+    const second = nextOccurrence(first, '2026-11-04', NOW);
+    const third = nextOccurrence(second, '2026-11-05', NOW);
+    expect(third.id).toBe('task-9-on-2026-11-05');
+    expect(third.seriesId).toBe('task-9');
+    expect(nextOccurrenceId(third, '2026-11-06')).toBe('task-9-on-2026-11-06');
   });
 });

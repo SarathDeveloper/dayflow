@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_ENABLE_BANK_SMS?: string;
   /** Set by scripts/release-android.mjs: the app-code version of a published release. */
   readonly VITE_APP_BUILD?: string;
+  /** Set by Vercel on its builds: the deployed commit, sent with crash reports. */
+  readonly VITE_VERCEL_GIT_COMMIT_SHA?: string;
 }
 
 interface ImportMeta {

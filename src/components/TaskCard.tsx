@@ -100,7 +100,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
   return (
     <div
-      className={`group relative bg-white dark:bg-slate-800/90 border transition-all duration-200 rounded-2xl shadow-sm overflow-hidden ${pStyle.border} ${
+      className={`@container group relative bg-white dark:bg-slate-800/90 border transition-all duration-200 rounded-2xl shadow-sm overflow-hidden ${pStyle.border} ${
         task.completed
           ? 'border-slate-200 dark:border-slate-800 opacity-60 bg-slate-100/60 dark:bg-slate-900/40'
           : 'border-slate-200 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600 hover:shadow-md'
@@ -291,16 +291,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       </div>
 
       {/* ── Bottom action bar ── */}
-      <div className="flex items-center justify-end gap-0.5 px-2 py-1.5 sm:px-3 border-t border-slate-100 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-900/30">
+      {/* Labels show only when the card itself is wide enough (container query): in narrow columns the row is icons only, and it wraps rather than clipping. */}
+      <div className="flex flex-wrap items-center justify-end gap-0.5 px-2 py-1.5 sm:px-3 border-t border-slate-100 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-900/30">
         {/* Start Focus Timer */}
         {!task.completed && (
           <button
             onClick={() => onStartFocus(task)}
             className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition-colors active:scale-95"
             title="Start Focus Timer for this Task"
+            aria-label="Start Focus Timer for this Task"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
-            <span className="hidden sm:inline">Focus</span>
+            <span className="hidden @md:inline">Focus</span>
           </button>
         )}
 
@@ -310,9 +312,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             onClick={() => setShowSubtasks(true)}
             className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors active:scale-95"
             title="Add checklist steps"
+            aria-label="Add checklist steps"
           >
             <ListChecks className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Steps</span>
+            <span className="hidden @md:inline">Steps</span>
           </button>
         )}
 
@@ -322,9 +325,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             onClick={() => onSkipTask(task.id)}
             className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 transition-colors active:scale-95"
             title="Skip this time and move to the next occurrence"
+            aria-label="Skip this time and move to the next occurrence"
           >
             <SkipForward className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Skip</span>
+            <span className="hidden @md:inline">Skip</span>
           </button>
         )}
 
@@ -333,9 +337,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           onClick={() => onEditTask(task)}
           className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors active:scale-95"
           title="Edit Task"
+          aria-label="Edit Task"
         >
           <Pencil className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Edit</span>
+          <span className="hidden @md:inline">Edit</span>
         </button>
 
         {/* Quick Snooze +15m if task has reminder */}
@@ -344,9 +349,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             onClick={() => onSnoozeTask(task.id, 15)}
             className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 transition-colors active:scale-95"
             title="Snooze 15 minutes"
+            aria-label="Snooze 15 minutes"
           >
             <Clock className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Snooze</span>
+            <span className="hidden @md:inline">Snooze</span>
           </button>
         )}
 
@@ -355,9 +361,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           onClick={() => onDeleteTask(task.id)}
           className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-slate-400 dark:text-slate-500 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors active:scale-95"
           title="Delete Task"
+          aria-label="Delete Task"
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Delete</span>
+          <span className="hidden @md:inline">Delete</span>
         </button>
       </div>
     </div>

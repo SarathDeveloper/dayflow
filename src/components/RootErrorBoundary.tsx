@@ -3,6 +3,7 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { isReleaseVersion } from '../lib/appUpdate';
 import { isNativeAndroid } from '../lib/platform';
 import { currentWebVersion, isAppUpdaterAvailable, restoreInstalledVersion } from '../services/appUpdater';
+import { reportError } from '../services/errorReporter';
 
 interface State {
   failed: boolean;
@@ -23,6 +24,7 @@ export class RootErrorBoundary extends React.Component<{ children: React.ReactNo
 
   componentDidCatch(error: unknown): void {
     console.error('Dayflow crashed:', error);
+    reportError('render', error);
     if (isNativeAndroid()) void SplashScreen.hide().catch(() => undefined);
   }
 

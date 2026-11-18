@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus, Tag as TagIcon, Folder, Trash2, Filter, Hash, Check } from 'lucide-react';
 import { Category, Task } from '../types';
 import { showConfirm } from './ui/AppDialog';
+import { newLedgerId } from '../lib/ledger';
 
 interface CategoriesViewProps {
   categories: Category[];
@@ -42,7 +43,7 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
     if (!newCatName.trim()) return;
 
     onAddCategory({
-      id: `cat-${Date.now()}`,
+      id: newLedgerId('cat'),
       name: newCatName.trim(),
       color: newCatColor,
       icon: 'Tag',

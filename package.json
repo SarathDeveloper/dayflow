@@ -30,8 +30,6 @@
     "@capgo/capacitor-updater": "8.54.0",
     "@noble/hashes": "2.2.0",
     "@supabase/supabase-js": "2.118.0",
-    "@tailwindcss/vite": "^4.1.14",
-    "@vitejs/plugin-react": "^5.0.4",
     "lucide-react": "^0.546.0",
     "pdfjs-dist": "5.4.624",
     "react": "^19.0.1",
@@ -40,12 +38,19 @@
   "devDependencies": {
     "@capacitor/android": "^8.0.0",
     "@capacitor/cli": "^8.0.0",
+    "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.4",
     "fake-indexeddb": "^6.2.8",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
     "vite-plugin-pwa": "^2.0.0",
-    "vitest": "^2.1.9"
+    "vitest": "^5.1.1"
+  },
+  "overrides": {
+    "workbox-build": {
+      "glob": "^14.0.6"
+    }
   }
 }

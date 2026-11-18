@@ -14,6 +14,7 @@ import {
 import { Task, Priority, RecurrenceType, SoundType, Category, Subtask } from '../types';
 import { audioService } from '../services/audioService';
 import { SoundFields } from './SoundFields';
+import { newLedgerId } from '../lib/ledger';
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -98,7 +99,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     if (!newSubtaskTitle.trim()) return;
     setSubtasks([
       ...subtasks,
-      { id: `sub-${Date.now()}`, title: newSubtaskTitle.trim(), completed: false },
+      { id: newLedgerId('sub'), title: newSubtaskTitle.trim(), completed: false },
     ]);
     setNewSubtaskTitle('');
   };

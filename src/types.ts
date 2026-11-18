@@ -54,6 +54,12 @@ export interface Task {
   recurrence: TaskRecurrence;
   reminder: TaskReminder;
   tags?: string[];
+  /**
+   * A repeating task's first id, shared by every later copy. Each copy's id is
+   * derived from it and its date (`nextOccurrenceId`), so devices that complete
+   * the same occurrence offline create one next copy, not two.
+   */
+  seriesId?: string;
   createdAt: string;
   updatedAt: string;
 }

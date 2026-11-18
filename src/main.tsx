@@ -7,6 +7,10 @@ import { AppDialogHost } from './components/ui/AppDialog';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
 import { migrateToSingleProfile } from './lib/singleProfile';
 import { checkForUpdates, confirmAppReady, lastUpdateCheckAt, startAppUpdater } from './services/appUpdater';
+import { installErrorReporter } from './services/errorReporter';
+
+// Crash reports (signed-in users only; no app data, see lib/errorReport.ts).
+installErrorReporter();
 
 // Fold a signed-in profile into the default keys before React reads storage.
 migrateToSingleProfile();

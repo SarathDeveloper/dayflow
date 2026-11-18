@@ -134,5 +134,10 @@ features, setup and the Android release process.
   404, captive portal) would make supabase-js delete the session.
 - **Schema changes** go in a new file in `supabase/migrations/`; keep RLS on
   and grant `authenticated` explicitly (new tables are not exposed by default).
+- **The website sends a Content-Security-Policy** (`vercel.json`; `npm run
+  preview` serves the same headers). A new external origin (fonts, API, CDN)
+  must be added there or the browser blocks it. The Android app has no CSP.
+- **Crash reports** go to `public.dayflow_client_errors` (insert-only, no app
+  data: `lib/errorReport.ts` scrubs them). Read them in the Supabase SQL editor.
 - **Bank SMS is off on `main`** (`VITE_ENABLE_BANK_SMS`). Its native listener
   exists only on `feature/bank-sms-notifications`; Play does not allow it.

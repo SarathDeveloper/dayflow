@@ -10,16 +10,10 @@ import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
 import { DateBar } from './components/DateBar';
-import { CalendarView } from './components/CalendarView';
 import { TaskCard } from './components/TaskCard';
 import { QuickAddBar } from './components/QuickAddBar';
 import { DailyPlanCard } from './components/DailyPlanCard';
 import { TaskModal } from './components/TaskModal';
-import { TimelineView } from './components/TimelineView';
-import { FocusRoom } from './components/FocusRoom';
-import { CategoriesView } from './components/CategoriesView';
-import { StatsView } from './components/StatsView';
-import { FinanceView } from './components/FinanceView';
 import { FinanceModal } from './components/FinanceModal';
 import { AccountModal } from './components/ledger/AccountModal';
 import { TransferModal } from './components/ledger/TransferModal';
@@ -29,10 +23,8 @@ import { SavingsModal } from './components/SavingsModal';
 import { HabitsView } from './components/HabitsView';
 import { TodayHabitsCard } from './components/TodayHabitsCard';
 import { TodayAlarmCard } from './components/TodayAlarmCard';
-import { AlarmsView } from './components/AlarmsView';
 import { AlarmRingOverlay } from './components/AlarmRingOverlay';
 import { HabitModal } from './components/HabitModal';
-import { GoalsView } from './components/GoalsView';
 import { DiaryView } from './components/DiaryView';
 import { DiaryEntryModal } from './components/DiaryEntryModal';
 import { TodayDiaryCard } from './components/TodayDiaryCard';
@@ -89,7 +81,7 @@ import { closeTopOverlay } from './lib/overlayBack';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
 import { NotificationService } from './services/notificationService';
-import { isRecurring, nextOccurrenceOf, rescheduled, skipOccurrence } from './lib/taskRecurrence';
+import { isRecurring, nextOccurrence, nextOccurrenceId, nextOccurrenceOf, rescheduled, skipOccurrence } from './lib/taskRecurrence';
 import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
 import { SplashScreen } from '@capacitor/splash-screen';
@@ -188,6 +180,15 @@ const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1'
 const PasswordVaultView = lazy(() => import('./components/PasswordVaultView'));
 const MaintenanceView = lazy(() => import('./components/MaintenanceView'));
 const DocumentVaultView = lazy(() => import('./components/DocumentVaultView'));
+// Tabs off the home screen load on first visit, keeping the first download small.
+const CalendarView = lazy(() => import('./components/CalendarView').then((m) => ({ default: m.CalendarView })));
+const TimelineView = lazy(() => import('./components/TimelineView').then((m) => ({ default: m.TimelineView })));
+const FocusRoom = lazy(() => import('./components/FocusRoom').then((m) => ({ default: m.FocusRoom })));
+const CategoriesView = lazy(() => import('./components/CategoriesView').then((m) => ({ default: m.CategoriesView })));
+const StatsView = lazy(() => import('./components/StatsView').then((m) => ({ default: m.StatsView })));
+const FinanceView = lazy(() => import('./components/FinanceView').then((m) => ({ default: m.FinanceView })));
+const AlarmsView = lazy(() => import('./components/AlarmsView').then((m) => ({ default: m.AlarmsView })));
+const GoalsView = lazy(() => import('./components/GoalsView').then((m) => ({ default: m.GoalsView })));
 
 /** Skip the write while a profile switch is still loading, so the previous profile is not saved under the new keys. */
 function usePersistJson(key: string, value: unknown, enabled: boolean) {
@@ -1636,14 +1637,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
       if (willBeCompleted && isRecurring(target)) {
         const nextDate = nextOccurrenceOf(target);
         const ended = Boolean(target.recurrence.endDate && nextDate > target.recurrence.endDate);
-        const exists = newTasks.some((t) => t.title === target.title && t.date === nextDate);
+        const nextId = nextOccurrenceId(target, nextDate);
+        const exists = newTasks.some((t) => t.id === nextId || (t.title === target.title && t.date === nextDate));
 
         if (!ended && !exists) {
-          newTasks.push({
-            ...rescheduled(target, nextDate, now),
-            id: `task-${Date.now()}`,
-            createdAt: now,
-          });
+          newTasks.push(nextOccurrence(target, nextDate, now));
         }
       }
 
@@ -1675,7 +1673,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       );
     } else {
       const newTask: Task = {
-        id: `task-${Date.now()}`,
+        id: newLedgerId('task'),
         title: partial.title || 'New Task',
         description: partial.description || '',
         completed: false,
@@ -1778,7 +1776,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         t.id === taskId
           ? {
               ...t,
-              subtasks: [...t.subtasks, { id: `sub-${Date.now()}`, title: trimmed, completed: false }],
+              subtasks: [...t.subtasks, { id: newLedgerId('sub'), title: trimmed, completed: false }],
               updatedAt: new Date().toISOString(),
             }
           : t
@@ -2596,7 +2594,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       if (financeCategoryError(name, kind, prev)) return prev;
       return [
         ...prev,
-        { id: `fincat-${Date.now()}`, name, kind, createdAt: now, updatedAt: now },
+        { id: newLedgerId('fincat'), name, kind, createdAt: now, updatedAt: now },
       ];
     });
     return null;
@@ -3171,7 +3169,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       setTransactions((prev) => [tx, ...prev]);
       next = {
         ...next,
-        payments: [...(debt.payments ?? []), { id: `dpay-${Date.now()}`, date: today, amount: left, transactionId: tx.id, settles: true }],
+        payments: [...(debt.payments ?? []), { id: newLedgerId('dpay'), date: today, amount: left, transactionId: tx.id, settles: true }],
       };
     }
     setDebts((prev) => prev.map((d) => (d.id === id ? next : d)));
@@ -3969,7 +3967,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
             {/* Tasks Stack List */}
             {filteredDateTasks.length > 0 ? (
-              <div className="columns-1 md:columns-2 lg:columns-3 gap-3">
+              <div className="columns-1 md:columns-2 xl:columns-3 gap-3">
                 {filteredDateTasks.map((task) => (
                   <div key={task.id} className="mb-3 break-inside-avoid">
                     <TaskCard
@@ -4032,6 +4030,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
           </div>
         )}
 
+        <Suspense fallback={<p role="status" className="text-sm text-stone-500">Loading…</p>}>
         {activeTab === 'calendar' && (
           <CalendarView
             selectedDate={selectedDate}
@@ -4257,6 +4256,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onPayBill={handlePayBill}
           />
         )}
+        </Suspense>
       </main>
 
       {/* Desktop Sidebar Nav */}
