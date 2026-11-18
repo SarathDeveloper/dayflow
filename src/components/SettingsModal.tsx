@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Clock, AlertTriangle, Folder, Settings2 } from 'lucide-react';
-import { NotificationSettings, SoundType } from '../types';
-import { audioService } from '../services/audioService';
+import { X, Bell, Moon, Sun, Download, Upload, RotateCcw, Folder, Settings2 } from 'lucide-react';
+import { NotificationSettings } from '../types';
 import { setAppLockEnabled } from '../lib/appLock';
 import { isNativeAndroid } from '../lib/platform';
 import {
@@ -13,12 +12,11 @@ import {
 } from '../services/appLock';
 import { storedAccount } from '../services/cloudSyncService';
 import { isAppUpdaterAvailable } from '../services/appUpdater';
-import { AlarmSongsSection } from './AlarmSongsSection';
+import { SettingSwitch } from './ui/SettingSwitch';
 import { AppUpdatesSection } from './AppUpdatesSection';
 import { CloudSyncSection } from './CloudSyncSection';
 import { ProgressSettingsSection } from './ProgressSettingsSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
-import type { ReminderReliabilityState } from './ReminderReliabilityCard';
 
 const categories = [
   { id: 'general', label: 'General' },
@@ -31,30 +29,6 @@ const sectionTitle = 'text-sm font-semibold text-slate-900 dark:text-slate-100';
 const helpText = 'text-xs leading-relaxed text-slate-600 dark:text-slate-400';
 const divider = 'border-t border-slate-200 dark:border-slate-800 pt-4';
 const field = 'min-h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100';
-
-function SettingSwitch({ label, checked, disabled, onChange }: {
-  label: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-medium has-disabled:cursor-default has-disabled:opacity-60">
-      <span>{label}</span>
-      <span className="relative shrink-0">
-        <input
-          type="checkbox"
-          role="switch"
-          checked={checked}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.checked)}
-          className="peer sr-only"
-        />
-        <span aria-hidden="true" className="relative block h-6 w-11 rounded-full bg-slate-200 transition-colors after:absolute after:top-0.5 after:left-0.5 after:size-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-indigo-600 peer-checked:after:translate-x-5 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-indigo-500 dark:bg-slate-700" />
-      </span>
-    </label>
-  );
-}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -73,11 +47,8 @@ interface SettingsModalProps {
   onChooseBackupFolder: () => void;
   onStopBackupFolder: () => void;
   cloudSync: CloudSyncApi;
-  /** Android-only reminder capability snapshot. */
-  nativeReminderState: ReminderReliabilityState | null;
-  /** e.g. "Morning standup - in 42 min" */
-  nextReminder: string | null;
-  onRequestExactAlarm: () => void;
+  /** Sound, voice, quiet hours and alarm songs live on the Notifications page. */
+  onOpenNotifications: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -97,9 +68,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChooseBackupFolder,
   onStopBackupFolder,
   cloudSync,
-  nativeReminderState,
-  nextReminder,
-  onRequestExactAlarm,
+  onOpenNotifications,
 }) => {
   const [category, setCategory] = useState<(typeof categories)[number]['id']>('general');
   const contentRef = useRef<HTMLDivElement>(null);
@@ -135,10 +104,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleTestSound = (sound: SoundType) => {
-    audioService.playSound(sound, 'Daily task reminder test');
-  };
 
   const toggleAppLock = async () => {
     if (appLockBusy) return;
@@ -285,127 +250,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           {category === 'alerts' && (
-            <div className="space-y-5">
-              <section aria-labelledby="settings-sound">
-                <h3 id="settings-sound" className={sectionTitle}>Notification sounds</h3>
-                <div className="mt-2 divide-y divide-slate-200 dark:divide-slate-800">
-                  <SettingSwitch
-                    label="Play chimes"
-                    checked={settings.soundEnabled}
-                    onChange={(soundEnabled) => onUpdateSettings({ ...settings, soundEnabled })}
-                  />
-                  <SettingSwitch
-                    label="Voice announcements"
-                    checked={settings.speechEnabled}
-                    onChange={(speechEnabled) => onUpdateSettings({ ...settings, speechEnabled })}
-                  />
-                </div>
-                <label htmlFor="settings-default-sound" className="mt-3 block text-xs font-medium text-slate-600 dark:text-slate-400">
-                  Default sound
-                </label>
-                <div className="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                  <select
-                    id="settings-default-sound"
-                    value={settings.defaultSound}
-                    onChange={(event) => onUpdateSettings({ ...settings, defaultSound: event.target.value as SoundType })}
-                    className={field}
-                  >
-                    <option value="chime">Gentle chime</option>
-                    <option value="bell">Harmonic bell</option>
-                    <option value="digital">Digital pulse</option>
-                    <option value="gentle">Soothing chord</option>
-                    <option value="voice">Voice announcement</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => handleTestSound(settings.defaultSound)}
-                    aria-label="Test default sound"
-                    className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                  >
-                    <Volume2 aria-hidden="true" className="size-4" />
-                    Test
-                  </button>
-                </div>
-              </section>
-
-              {/* Reminder delivery (native Android only) */}
-              {nativeReminderState && (
-                <div className={`space-y-2 ${divider}`}>
-                  <h3 className={`flex items-center gap-1.5 ${sectionTitle}`}>
-                    {nativeReminderState.permissionGranted &&
-                    nativeReminderState.exactAlarm !== 'denied' &&
-                    nativeReminderState.exactAlarm !== 'prompt' ? (
-                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    ) : (
-                      <AlertTriangle className="w-4 h-4 text-amber-500" />
-                    )}
-                    <span>Reminder delivery</span>
-                  </h3>
-
-                  <div className="text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
-                    <p className="flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                      <span>{nextReminder ?? 'No upcoming reminder scheduled'}</span>
-                    </p>
-                    <p className="text-slate-500 dark:text-slate-400">
-                      Notifications: {nativeReminderState.permissionGranted ? 'allowed' : 'blocked'}
-                    </p>
-                    <p className="text-slate-500 dark:text-slate-400">
-                      Exact alarms:{' '}
-                      {nativeReminderState.exactAlarm === 'granted'
-                        ? 'allowed'
-                        : nativeReminderState.exactAlarm === 'unsupported'
-                        ? 'not applicable on this Android version'
-                        : 'may be delayed'}
-                    </p>
-                  </div>
-
-                  {(nativeReminderState.exactAlarm === 'denied' ||
-                    nativeReminderState.exactAlarm === 'prompt') && (
-                    <button
-                      type="button"
-                      onClick={onRequestExactAlarm}
-                      className="w-full py-2 px-3 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 border border-amber-200 dark:border-amber-800/60 text-amber-700 dark:text-amber-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      Allow exact alarms
-                    </button>
-                  )}
-
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
-                    If reminders still arrive late, set Settings &gt; Apps &gt; Dayflow &gt; Battery to
-                    Unrestricted.
-                  </p>
-                </div>
-              )}
-
-              <section aria-label="Quiet hours" className={divider}>
-                <SettingSwitch
-                  label="Quiet hours"
-                  checked={settings.quietHours.enabled}
-                  onChange={(enabled) => onUpdateSettings({ ...settings, quietHours: { ...settings.quietHours, enabled } })}
-                />
-                {settings.quietHours.enabled && (
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    {(['start', 'end'] as const).map((time) => (
-                      <label key={time} className="min-w-0 space-y-1.5 text-xs font-medium text-slate-600 dark:text-slate-400">
-                        <span className="block">{time === 'start' ? 'Start time' : 'End time'}</span>
-                        <input
-                          type="time"
-                          value={settings.quietHours[time]}
-                          onChange={(event) => onUpdateSettings({
-                            ...settings,
-                            quietHours: { ...settings.quietHours, [time]: event.target.value },
-                          })}
-                          className={field}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <AlarmSongsSection />
-            </div>
+            <section aria-labelledby="settings-alerts" className="space-y-3">
+              <h3 id="settings-alerts" className={sectionTitle}>Notifications</h3>
+              <p className={helpText}>
+                Reminder sound, reading reminders aloud, quiet hours, alarm songs and the checks that keep
+                reminders arriving are all on the Notifications page.
+              </p>
+              <button
+                type="button"
+                onClick={onOpenNotifications}
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+              >
+                <Bell aria-hidden="true" className="size-4" />
+                Open Notifications
+              </button>
+            </section>
           )}
 
           <div hidden={category !== 'planning'}>

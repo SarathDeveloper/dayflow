@@ -147,7 +147,7 @@ import {
   unmarkDeleted,
   writeSyncMeta,
 } from './lib/persistence';
-import { WEEKLY_REPORT_TASK_ID, buildReminderPlans, describeNextReminder } from './lib/reminders';
+import { WEEKLY_REPORT_TASK_ID, buildReminderPlans } from './lib/reminders';
 import { resolveReminderDelivery } from './lib/sounds';
 import {
   alarmDueAt,
@@ -4116,6 +4116,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         {activeTab === 'notifications' && (
           <NotificationsView
             settings={settings}
+            onUpdateSettings={setSettings}
             nativeSetup={nativeSetup}
             batteryUnrestricted={batteryUnrestricted}
             webPermission={permissionStatus}
@@ -4131,7 +4132,6 @@ export default function App({ skipInitialLock = false }: AppProps) {
               setPermissionStatus(status.granted ? 'granted' : 'denied');
             }}
             onRefreshBattery={refreshBatteryStatus}
-            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
 
@@ -4446,13 +4446,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
         onChooseBackupFolder={handleChooseBackupFolder}
         onStopBackupFolder={handleStopBackupFolder}
         cloudSync={cloudSync}
-        nativeReminderState={
-          isNativeAndroid() && nativeSetup
-            ? { permissionGranted: nativeSetup.granted, exactAlarm: nativeSetup.exactAlarm }
-            : null
-        }
-        nextReminder={isNativeAndroid() ? describeNextReminder(tasks, settings, habits, habitCheckIns, goals) : null}
-        onRequestExactAlarm={handleOpenExactAlarmSettings}
+        onOpenNotifications={() => {
+          setIsSettingsOpen(false);
+          setActiveTab('notifications');
+        }}
       />
 
       {recentlyDeletedDiary && (
