@@ -195,6 +195,161 @@ export async function sealEntries(id: string, key: CryptoKey, entries: VaultEntr
   }
 }
 
+/*
+ * Synced format (v2). The vault is split so two devices can edit different
+ * logins at once: one header (salt + wrapped data key, same wrapping as v1) and
+ * one encrypted record per login. A passphrase change only re-wraps the data
+ * key, so the login records stay valid on every device.
+ */
+
+export interface VaultHeader {
+  /** Same random id as a v1 file, so a migrated vault keeps its key bindings. */
+  vaultId: string;
+  salt: string;
+  wrappedKey: SealedValue;
+  updatedAt: string;
+}
+
+/** One login, encrypted. The row id and `updatedAt` are bound as AES-GCM additional data. */
+export interface VaultRecord {
+  nonce: string;
+  ciphertext: string;
+  updatedAt: string;
+}
+
+export const VAULT_ENTRY_PREFIX = 'vault-';
+
+export function entryRowId(entryId: string): string {
+  return `${VAULT_ENTRY_PREFIX}${entryId}`;
+}
+
+function recordContext(vaultId: string, rowId: string, updatedAt: string): Uint8Array<ArrayBuffer> {
+  return encodeText(`dayflow-password-vault:v2:${vaultId}:entry:${rowId}:${updatedAt}`);
+}
+
+function isIsoTime(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+}
+
+export function isVaultHeader(value: unknown): value is VaultHeader {
+  return isObject(value) && isBase64(value.vaultId, 16) && isBase64(value.salt, 16) &&
+    isSealed(value.wrappedKey, 48) && isIsoTime(value.updatedAt);
+}
+
+export function isVaultRecord(value: unknown): value is VaultRecord {
+  return isObject(value) && isBase64(value.nonce, 12) && isBase64(value.ciphertext) &&
+    value.ciphertext.length <= MAX_VAULT_FILE && isIsoTime(value.updatedAt);
+}
+
+/** Copies only the known fields, so stored or pulled objects cannot carry extras. */
+export function cleanHeader(header: VaultHeader): VaultHeader {
+  return {
+    vaultId: header.vaultId,
+    salt: header.salt,
+    wrappedKey: { nonce: header.wrappedKey.nonce, ciphertext: header.wrappedKey.ciphertext },
+    updatedAt: header.updatedAt,
+  };
+}
+
+export function cleanRecord(record: VaultRecord): VaultRecord {
+  return { nonce: record.nonce, ciphertext: record.ciphertext, updatedAt: record.updatedAt };
+}
+
+async function wrapNewKey(passphrase: string, vaultId: string, rawKey: Uint8Array<ArrayBuffer>) {
+  if (passphrase.trim().length < MIN_VAULT_PASSPHRASE) {
+    throw new Error(`Use a vault passphrase of at least ${MIN_VAULT_PASSPHRASE} characters.`);
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const wrappingKey = await passphraseKey(passphrase, salt);
+  return { salt: encode(salt), wrappedKey: await seal(wrappingKey, rawKey, context(vaultId, 'key')) };
+}
+
+async function unwrapRawKey(header: Pick<VaultHeader, 'vaultId' | 'salt' | 'wrappedKey'>, passphrase: string) {
+  const wrappingKey = await passphraseKey(passphrase, decode(header.salt));
+  try {
+    return await unseal(wrappingKey, header.wrappedKey, context(header.vaultId, 'key'));
+  } catch {
+    throw new Error('The passphrase is incorrect.');
+  }
+}
+
+/** A new, empty synced vault with a fresh data key. */
+export async function createVaultHeader(passphrase: string, now: string) {
+  const vaultId = encode(crypto.getRandomValues(new Uint8Array(16)));
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    const wrapped = await wrapNewKey(passphrase, vaultId, rawKey);
+    return { header: { vaultId, ...wrapped, updatedAt: now }, key: await importKey(rawKey) };
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
+export async function unlockVaultHeader(header: VaultHeader, passphrase: string): Promise<CryptoKey> {
+  const rawKey = await unwrapRawKey(header, passphrase);
+  try {
+    return await importKey(rawKey);
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
+/** Re-wraps the same data key under a new passphrase (the logins need no re-encryption). */
+export async function rewrapVaultHeader(header: VaultHeader, current: string, next: string, now: string): Promise<VaultHeader> {
+  const rawKey = await unwrapRawKey(header, current);
+  try {
+    return { vaultId: header.vaultId, ...(await wrapNewKey(next, header.vaultId, rawKey)), updatedAt: now };
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
+export async function sealVaultRecord(vaultId: string, key: CryptoKey, entry: VaultEntry, updatedAt: string): Promise<VaultRecord> {
+  const [clean] = readEntries([entry]);
+  const bytes = encodeText(JSON.stringify(clean));
+  try {
+    if (bytes.length > MAX_VAULT_FILE * 0.1) throw new Error('This login is too large.');
+    const sealed = await seal(key, bytes, recordContext(vaultId, entryRowId(clean.id), updatedAt));
+    return { ...sealed, updatedAt };
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+/** Throws when the record was altered, moved to another row or vault, or re-dated. */
+export async function openVaultRecord(vaultId: string, key: CryptoKey, rowId: string, record: VaultRecord): Promise<VaultEntry> {
+  let bytes: Uint8Array<ArrayBuffer> | undefined;
+  try {
+    bytes = await unseal(key, record, recordContext(vaultId, rowId, record.updatedAt));
+    const [entry] = readEntries([JSON.parse(decoder.decode(bytes))]);
+    if (entryRowId(entry.id) !== rowId) throw new Error('mismatch');
+    return entry;
+  } catch {
+    throw new Error('A vault login could not be decrypted.');
+  } finally {
+    bytes?.fill(0);
+  }
+}
+
+/** The v1 file's key wrapping becomes the v2 header unchanged; only the logins are re-sealed. */
+export async function migrateVaultFile(file: VaultFile, passphrase: string, now: string) {
+  const opened = await openVault(file, passphrase);
+  const header: VaultHeader = { vaultId: file.id, salt: file.salt, wrappedKey: file.wrappedKey, updatedAt: now };
+  return { header, key: opened.key, entries: opened.entries };
+}
+
+/** A v1 backup file (the format every app version restores) from an unlocked v2 vault. */
+export async function exportVaultFile(header: VaultHeader, key: CryptoKey, entries: VaultEntry[]): Promise<VaultFile> {
+  return {
+    format: 'dayflow-password-vault',
+    version: 1,
+    id: header.vaultId,
+    salt: header.salt,
+    wrappedKey: header.wrappedKey,
+    entries: await sealEntries(header.vaultId, key, entries),
+  };
+}
+
 function randomIndex(size: number): number {
   const value = new Uint32Array(1);
   const limit = 2 ** 32 - (2 ** 32 % size);

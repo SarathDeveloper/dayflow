@@ -19,7 +19,7 @@ import {
 } from '../services/documentStorage';
 import { writeDocumentReminders } from '../services/documentReminderStore';
 import { DocumentVaultNative, exportTextNative, hasDocumentVaultNative, openNativePdf } from '../services/documentVaultNative';
-import { hasPasswordVault, PasswordVault } from '../services/passwordVault';
+import { hasNativePasswordVault, PasswordVault } from '../services/passwordVault';
 import { downloadTextFile } from '../services/maintenanceStorage';
 import {
   beginExternalActivity, consumeExternalResume, endExternalActivity, shouldIgnorePauseForExternal,
@@ -49,7 +49,7 @@ const ACCEPT = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png';
 const CATEGORY_SUGGESTIONS = ['Identity', 'Vehicle', 'Insurance', 'Home', 'Receipts', 'Medical', 'Finance', 'Other'];
 const inputClass = 'w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3 py-2 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white';
 const labelClass = 'block space-y-1 text-sm font-semibold text-slate-700 dark:text-slate-200';
-const LIMITS_TEXT = `PDF, JPEG or PNG · up to ${formatFileSize(DOCUMENT_LIMITS.maxFileBytes)} per file · ${formatFileSize(DOCUMENT_LIMITS.maxVaultBytes)} in total · ${DOCUMENT_LIMITS.maxDocuments} documents · ${DOCUMENT_LIMITS.maxRevisionsPerDocument} versions each`;
+const LIMITS_TEXT = `PDF, JPEG or PNG Â· up to ${formatFileSize(DOCUMENT_LIMITS.maxFileBytes)} per file Â· ${formatFileSize(DOCUMENT_LIMITS.maxVaultBytes)} in total Â· ${DOCUMENT_LIMITS.maxDocuments} documents Â· ${DOCUMENT_LIMITS.maxRevisionsPerDocument} versions each`;
 
 interface DocDraft {
   title: string;
@@ -175,7 +175,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
   // Lifecycle: screen protection, lock on background / unmount, resume after pickers.
   useEffect(() => {
     mounted.current = true;
-    if (hasPasswordVault()) void PasswordVault.setScreenProtected({ enabled: true }).catch(() => {});
+    if (hasNativePasswordVault()) void PasswordVault.setScreenProtected({ enabled: true }).catch(() => {});
     const onPause = () => {
       if (shouldIgnorePauseForExternal()) {
         pausedUnderGrace.current = true;
@@ -197,7 +197,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
       lock();
       document.removeEventListener('visibilitychange', onVisibility);
       void listener.then((handle) => handle.remove()).catch(() => {});
-      if (hasPasswordVault()) void PasswordVault.setScreenProtected({ enabled: false }).catch(() => {});
+      if (hasNativePasswordVault()) void PasswordVault.setScreenProtected({ enabled: false }).catch(() => {});
     };
   }, [lock]);
 
@@ -539,7 +539,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
       const bytes = await decryptAttachment(session, revision.attachmentId, blob);
       try {
         if (!isCurrent()) return;
-        const title = `${doc.title} · ${revision.filename}`;
+        const title = `${doc.title} Â· ${revision.filename}`;
         if (revision.mimeType === 'application/pdf' && hasDocumentVaultNative()) {
           const { handle, pageCount } = await openNativePdf(bytes);
           if (!isCurrent()) {
@@ -599,7 +599,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
   );
   const assetName = (id?: string) => {
     const item = maintenanceItems.find((candidate) => candidate.id === id);
-    return item ? `${item.asset} · ${item.title}` : id ? 'Deleted maintenance item' : '';
+    return item ? `${item.asset} Â· ${item.title}` : id ? 'Deleted maintenance item' : '';
   };
   const visible = useMemo(() => {
     if (!index) return [];
@@ -618,7 +618,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
       <fieldset disabled={busy} className="space-y-3">
         {opts.details && <>
           <label className={labelClass}><span>Title</span>
-            <input required maxLength={DOCUMENT_LIMITS.maxTitle} className={inputClass} placeholder="Passport, car insurance…" value={draft.title} onChange={(e) => update({ ...draft, title: e.target.value })} />
+            <input required maxLength={DOCUMENT_LIMITS.maxTitle} className={inputClass} placeholder="Passport, car insuranceâ€¦" value={draft.title} onChange={(e) => update({ ...draft, title: e.target.value })} />
           </label>
           <label className={labelClass}><span>Category</span>
             <input list="document-categories" maxLength={DOCUMENT_LIMITS.maxCategory} className={inputClass} placeholder="Identity" value={draft.category} onChange={(e) => update({ ...draft, category: e.target.value })} />
@@ -627,7 +627,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
           <label className={labelClass}><span>Linked vehicle or home item (optional)</span>
             <select className={inputClass} value={draft.assetId} onChange={(e) => update({ ...draft, assetId: e.target.value, serviceRecordId: '' })}>
               <option value="">Not linked</option>
-              {maintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.asset} · {item.title}</option>)}
+              {maintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.asset} Â· {item.title}</option>)}
             </select>
           </label>
           {asset && asset.history.length > 0 && (
@@ -666,7 +666,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
       <Button type="button" variant="secondary" disabled={busy} onClick={() => openPicker('draft')}>
         <Upload className="size-4" /> {file ? 'Choose a different file' : 'Choose file'}
       </Button>
-      {file && <p className="text-sm text-slate-700 dark:text-slate-200 break-all">{file.name} · {formatFileSize(file.size)}</p>}
+      {file && <p className="text-sm text-slate-700 dark:text-slate-200 break-all">{file.name} Â· {formatFileSize(file.size)}</p>}
       <p className="text-xs text-slate-500 dark:text-slate-400">{LIMITS_TEXT}</p>
     </div>
   );
@@ -717,7 +717,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
         {header}
         {alerts}
         {hiddenInputs}
-        {!hasPasswordVault() && <p className="text-xs text-slate-500 dark:text-slate-400">Files are encrypted on this device. Screen-capture protection is only available in the Android app.</p>}
+        {!hasNativePasswordVault() && <p className="text-xs text-slate-500 dark:text-slate-400">Files are encrypted on this device. Screen-capture protection is only available in the Android app.</p>}
         {pending && (
           <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">
             The vault locked while you were adding a document. {pending.kind !== 'edit' && 'file' in pending && pending.file ? '1 picked file is waiting. ' : ''}Unlock to continue, or{' '}
@@ -726,7 +726,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
         )}
         <Card className="space-y-4 p-4">
           {envelope === undefined ? (
-            error ? <Button variant="secondary" onClick={() => { setError(''); setReload((value) => value + 1); }}><RefreshCw className="size-4" /> Retry</Button> : <p role="status">Loading…</p>
+            error ? <Button variant="secondary" onClick={() => { setError(''); setReload((value) => value + 1); }}><RefreshCw className="size-4" /> Retry</Button> : <p role="status">Loadingâ€¦</p>
           ) : mode === 'unlock' && envelope === null ? (
             <div className="space-y-3 text-sm text-slate-700 dark:text-slate-200">
               <p>Keep passports, insurance, warranties and receipts encrypted with their own passphrase. Titles, files and history are encrypted; only reminder dates are stored unencrypted so reminders can fire while the vault is locked.</p>
@@ -744,9 +744,9 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
                 {passphraseField('Repeat passphrase', repeat, setRepeat)}
               </> : passphraseField(mode === 'restore' ? 'Backup passphrase' : 'Vault passphrase', passphrase, setPassphrase)}
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy}>{busy ? 'Working…' : { unlock: 'Unlock', create: 'Create vault', restore: 'Restore backup' }[mode]}</Button>
+                <Button type="submit" disabled={busy}>{busy ? 'Workingâ€¦' : { unlock: 'Unlock', create: 'Create vault', restore: 'Restore backup' }[mode]}</Button>
                 {mode !== 'unlock' && <Button type="button" variant="ghost" disabled={busy} onClick={() => { setMode('unlock'); setRestoreSource(null); setError(''); }}>Cancel</Button>}
-                {mode === 'unlock' && envelope && <Button type="button" variant="ghost" disabled={busy} onClick={() => openPicker('restore')}>Restore a backup…</Button>}
+                {mode === 'unlock' && envelope && <Button type="button" variant="ghost" disabled={busy} onClick={() => openPicker('restore')}>Restore a backupâ€¦</Button>}
               </div>
             </form>
           )}
@@ -791,7 +791,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
                 <a href={viewer.url} target="_blank" rel="noreferrer" className="block p-2 text-center text-xs font-semibold text-indigo-600 dark:text-indigo-400">Open in a new tab</a>
               </>
             )}
-            {viewer.kind === 'pdf-native' && (pagePng ? <img src={pagePng} alt={`Page ${viewer.page + 1}`} className="w-full bg-white" /> : <p role="status" className="p-6 text-center text-sm">Rendering page…</p>)}
+            {viewer.kind === 'pdf-native' && (pagePng ? <img src={pagePng} alt={`Page ${viewer.page + 1}`} className="w-full bg-white" /> : <p role="status" className="p-6 text-center text-sm">Rendering pageâ€¦</p>)}
           </div>
           {viewer.kind === 'pdf-native' && viewer.pageCount > 1 && (
             <div className="flex items-center justify-center gap-3">
@@ -819,10 +819,10 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
               </select>
               <select aria-label="Filter by vehicle or home item" className={inputClass} value={assetFilter} onChange={(e) => setAssetFilter(e.target.value)}>
                 <option value="">All items</option>
-                {maintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.asset} · {item.title}</option>)}
+                {maintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.asset} Â· {item.title}</option>)}
               </select>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{formatFileSize(usage)} of {formatFileSize(DOCUMENT_LIMITS.maxVaultBytes)} used · {unlockedIndex.documents.length} of {DOCUMENT_LIMITS.maxDocuments} documents</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{formatFileSize(usage)} of {formatFileSize(DOCUMENT_LIMITS.maxVaultBytes)} used Â· {unlockedIndex.documents.length} of {DOCUMENT_LIMITS.maxDocuments} documents</p>
           </Card>
           {visible.length === 0 && <p className="text-sm text-slate-600 dark:text-slate-300">{unlockedIndex.documents.length ? 'No matching documents.' : 'The vault is empty. Add your first document.'}</p>}
           {visible.map((doc) => {
@@ -834,7 +834,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
                 <span className="flex items-start justify-between gap-2">
                   <span className="min-w-0">
                     <span className="block font-bold text-slate-900 dark:text-white break-words">{doc.title}</span>
-                    <span className="block text-xs text-slate-500 dark:text-slate-400">{doc.category}{doc.assetId ? ` · ${assetName(doc.assetId)}` : ''} · {doc.revisions.length} {doc.revisions.length === 1 ? 'version' : 'versions'}</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">{doc.category}{doc.assetId ? ` Â· ${assetName(doc.assetId)}` : ''} Â· {doc.revisions.length} {doc.revisions.length === 1 ? 'version' : 'versions'}</span>
                   </span>
                   {badge && <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.className}`}>{badge.text}</span>}
                 </span>
@@ -851,7 +851,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             {filePicker(view.file)}
             {draftFields(view.draft, (draft) => setView({ ...view, draft }), { details: true, expiry: true, note: true })}
             <div className="flex gap-2">
-              <Button type="submit" disabled={busy || !view.file}>{busy ? 'Encrypting…' : 'Save document'}</Button>
+              <Button type="submit" disabled={busy || !view.file}>{busy ? 'Encryptingâ€¦' : 'Save document'}</Button>
               <Button type="button" variant="ghost" disabled={busy} onClick={() => setView({ kind: 'list' })}>Cancel</Button>
             </div>
           </form>
@@ -866,7 +866,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white break-words">{detailDoc.title}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">{detailDoc.category}{detailDoc.assetId ? ` · ${assetName(detailDoc.assetId)}` : ''}</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{detailDoc.category}{detailDoc.assetId ? ` Â· ${assetName(detailDoc.assetId)}` : ''}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   {revision.expiresOn ? `Reminders: ${detailDoc.reminderDays.length ? detailDoc.reminderDays.map((d) => (d === 0 ? 'on the day' : `${d} days before`)).join(', ') : 'off'}` : 'No expiry date'}
                 </p>
@@ -892,14 +892,14 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="min-w-0 break-all text-slate-800 dark:text-slate-100">
                         {rev.id === detailDoc.currentRevisionId && <span className="mr-1 rounded bg-indigo-100 px-1.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">Current</span>}
-                        {rev.filename} · {formatFileSize(rev.size)}
+                        {rev.filename} Â· {formatFileSize(rev.size)}
                       </span>
                       <span className="flex gap-1">
                         <Button size="sm" variant="ghost" disabled={busy} onClick={() => openRevision(detailDoc, rev)}><Eye className="size-4" /></Button>
                         {rev.id !== detailDoc.currentRevisionId && <Button size="sm" variant="ghost" aria-label="Delete version" disabled={busy} onClick={() => void deleteVersion(detailDoc, rev)}><Trash2 className="size-4" /></Button>}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Added {formatShortDate(rev.addedAt.slice(0, 10))}{rev.expiresOn ? ` · expires ${formatShortDate(rev.expiresOn)}` : ''}{rev.note ? ` · ${rev.note}` : ''}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Added {formatShortDate(rev.addedAt.slice(0, 10))}{rev.expiresOn ? ` Â· expires ${formatShortDate(rev.expiresOn)}` : ''}{rev.note ? ` Â· ${rev.note}` : ''}</p>
                   </li>
                 ))}
               </ul>
@@ -917,7 +917,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             {filePicker(view.file)}
             {draftFields(view.draft, (draft) => setView({ ...view, draft }), { details: false, expiry: true, note: true })}
             <div className="flex gap-2">
-              <Button type="submit" disabled={busy || !view.file}>{busy ? 'Encrypting…' : 'Save renewal'}</Button>
+              <Button type="submit" disabled={busy || !view.file}>{busy ? 'Encryptingâ€¦' : 'Save renewal'}</Button>
               <Button type="button" variant="ghost" disabled={busy} onClick={() => setView({ kind: 'detail', id: detailDoc.id })}>Cancel</Button>
             </div>
           </form>
@@ -930,7 +930,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             <h3 className="font-bold text-slate-900 dark:text-white">Edit document</h3>
             {draftFields(view.draft, (draft) => setView({ ...view, draft }), { details: true, expiry: true, note: false })}
             <div className="flex gap-2">
-              <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</Button>
+              <Button type="submit" disabled={busy}>{busy ? 'Savingâ€¦' : 'Save changes'}</Button>
               <Button type="button" variant="ghost" disabled={busy} onClick={() => setView({ kind: 'detail', id: detailDoc.id })}>Cancel</Button>
             </div>
           </form>
@@ -959,7 +959,7 @@ export default function DocumentVaultView({ maintenanceItems, intent, onIntentHa
             <p className="text-xs text-slate-500 dark:text-slate-400">One file with every document, still encrypted. It restores on a new phone with the vault passphrase. Size: about {formatFileSize(Math.round(usage * 1.37))}.</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" disabled={busy} onClick={exportBackup}><Download className="size-4" /> Save backup</Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => openPicker('restore')}><Upload className="size-4" /> Restore backup…</Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => openPicker('restore')}><Upload className="size-4" /> Restore backupâ€¦</Button>
             </div>
             {restoreSource && mode === 'restore' && (
               <form className="space-y-2" onSubmit={submitPassphrase} autoComplete="off">

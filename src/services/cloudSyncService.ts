@@ -289,8 +289,11 @@ export async function signOut(): Promise<void> {
 // Records
 // ---------------------------------------------------------------------------
 
-/** Ids and versions of rows changed after `since` (all rows when null), oldest first. */
-export async function pullRowMeta(userId: string, since: string | null): Promise<CloudRowMeta[]> {
+/**
+ * Ids and versions of rows changed after `since` (all rows when null), oldest
+ * first. `collection` limits it to one collection (the password vault syncs alone).
+ */
+export async function pullRowMeta(userId: string, since: string | null, collection?: string): Promise<CloudRowMeta[]> {
   const supabase = requireClient();
   const rows: CloudRowMeta[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
@@ -302,6 +305,7 @@ export async function pullRowMeta(userId: string, since: string | null): Promise
       .order('id', { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
     if (since) query = query.gt('server_updated_at', since);
+    if (collection) query = query.eq('collection', collection);
     const { data, error } = await query;
     if (error) throw toCloudError(error);
     rows.push(...((data ?? []) as CloudRowMeta[]));

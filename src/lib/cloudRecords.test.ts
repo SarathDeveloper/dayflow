@@ -284,3 +284,21 @@ describe('initialSyncMode', () => {
     expect(isAccountSwitch(undefined, 'user-b')).toBe(false);
   });
 });
+
+describe('rows of collections that sync themselves', () => {
+  it('leaves password vault rows and tombstones out of the app envelope', () => {
+    const local = envelope();
+    const remote = rowsToEnvelope(
+      [
+        { id: 'vault-a', collection: 'passwordVault', updated_at: T(5), deleted: true, server_updated_at: T(5) },
+        { id: 'gone-task', collection: null, updated_at: T(6), deleted: true, server_updated_at: T(6) },
+      ],
+      local,
+    );
+    expect(remote.tombstones).toEqual({ 'gone-task': T(6) });
+    const onlyVault: CloudRowMeta[] = [
+      { id: '__vault', collection: 'passwordVault', updated_at: T(1), deleted: false, server_updated_at: T(1) },
+    ];
+    expect(restoreFromRows(local, { meta: onlyVault, rows: [] })).toBeNull();
+  });
+});

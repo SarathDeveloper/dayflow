@@ -64,6 +64,15 @@ export interface CloudRowMeta {
 
 const KNOWN_COLLECTIONS = new Set<string>(RECORD_COLLECTIONS);
 
+/**
+ * A row of a collection this envelope does not carry, such as the password
+ * vault, which syncs its encrypted rows itself (lib/passwordVaultSync.ts).
+ * A tombstone pushed without a collection (null) is still the envelope's.
+ */
+function isForeignRow(row: { id: string; collection: string | null }): boolean {
+  return row.id !== SETTINGS_ROW_ID && row.collection !== null && !KNOWN_COLLECTIONS.has(row.collection);
+}
+
 function toTime(iso: string | undefined | null): number {
   const time = iso ? Date.parse(iso) : NaN;
   return Number.isFinite(time) ? time : 0;
@@ -136,7 +145,8 @@ export function rowsToEnvelope(rows: Array<CloudRow | CloudRowMeta>, local: Sync
 
   for (const row of rows) {
     if (row.deleted) {
-      if (row.id !== SETTINGS_ROW_ID) tombstones[row.id] = iso(toTime(row.updated_at));
+      // Collections synced on their own (the password vault) keep their tombstones.
+      if (row.id !== SETTINGS_ROW_ID && !isForeignRow(row)) tombstones[row.id] = iso(toTime(row.updated_at));
       continue;
     }
     const value = 'data' in row ? row.data : null;
@@ -320,7 +330,7 @@ export function restoreFromRows(
   pulled: { meta: CloudRowMeta[]; rows: CloudRow[] },
   options: { allowEmpty?: boolean } = {},
 ): SyncEnvelope | null {
-  if (!options.allowEmpty && !pulled.meta.some((row) => !row.deleted)) return null;
+  if (!options.allowEmpty && !pulled.meta.some((row) => !row.deleted && !isForeignRow(row))) return null;
   const remote = rowsToEnvelope([...pulled.meta.filter((row) => row.deleted), ...pulled.rows], local);
   return {
     ...remote,
