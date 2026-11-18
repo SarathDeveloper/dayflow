@@ -179,7 +179,7 @@ describe('buildExtraReminderPlans: documents', () => {
   it('uses generic text by default and routes to the vault', () => {
     const [plan] = buildExtraReminderPlans({ documents: [doc()], maintenance: [], now: NOW });
     expect(plan.title).toBe('Document reminder');
-    expect(plan.body).toBe('A document in your vault expires in 7 days. Unlock the vault to see it.');
+    expect(plan.body).toBe('A document in your vault expires in 7 days. Open Documents to see it.');
     expect(plan.route).toBe('documents');
     expect(localDay(plan.fireAt)).toBe('2026-12-01');
     expect(plan.fireAt.getHours()).toBe(9);
@@ -187,7 +187,7 @@ describe('buildExtraReminderPlans: documents', () => {
 
   it('uses the label only when present', () => {
     const [plan] = buildExtraReminderPlans({ documents: [doc({ label: '  Passport  ' })], maintenance: [], now: NOW });
-    expect(plan.body).toBe('Passport expires in 7 days. Unlock the vault to see it.');
+    expect(plan.body).toBe('Passport expires in 7 days. Open Documents to see it.');
     expect(plan.title).toBe('Document reminder');
   });
 
@@ -202,9 +202,9 @@ describe('buildExtraReminderPlans: documents', () => {
       now: NOW,
     });
     expect(plans.map((plan) => plan.body)).toEqual([
-      'A document in your vault expires today. Unlock the vault to see it.',
-      'A document in your vault expires tomorrow. Unlock the vault to see it.',
-      'A document in your vault has expired. Unlock the vault to see it.',
+      'A document in your vault expires today. Open Documents to see it.',
+      'A document in your vault expires tomorrow. Open Documents to see it.',
+      'A document in your vault has expired. Open Documents to see it.',
     ]);
   });
 

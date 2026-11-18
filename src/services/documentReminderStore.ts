@@ -6,7 +6,7 @@
  * It holds ONLY: an opaque random key per document, reminder dates, expiry dates,
  * and document titles when the user turned on "Show document titles in
  * reminders". It is rewritten from the decrypted index after every successful
- * commit, unlock and restore.
+ * commit, open, sync and restore.
  *
  * Device-only: never synced and not part of the app backup.
  */

@@ -413,6 +413,15 @@ export function cleanRecord(record: VaultRecord): VaultRecord {
   return { nonce: record.nonce, ciphertext: record.ciphertext, updatedAt: record.updatedAt };
 }
 
+/**
+ * Wraps an existing data key under a passphrase, as a v1 file header stores it
+ * (salt + wrappedKey). The document vault uses it to password-protect a backup
+ * without re-encrypting its files.
+ */
+export function wrapVaultFileKey(passphrase: string, vaultId: string, rawKey: Uint8Array<ArrayBuffer>) {
+  return wrapNewKey(passphrase, vaultId, rawKey);
+}
+
 async function wrapNewKey(passphrase: string, vaultId: string, rawKey: Uint8Array<ArrayBuffer>) {
   if (passphrase.trim().length < MIN_VAULT_PASSPHRASE) {
     throw new Error(`Use a vault passphrase of at least ${MIN_VAULT_PASSPHRASE} characters.`);

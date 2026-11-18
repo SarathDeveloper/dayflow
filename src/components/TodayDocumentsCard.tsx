@@ -22,7 +22,7 @@ interface DueDocument {
 /**
  * Documents whose reminder date has arrived, from the plaintext reminder schedule
  * only (no vault access). Titles appear only when the user opted in; otherwise the
- * card stays generic and the vault must be unlocked to see which documents.
+ * card stays generic: open Documents to see which ones.
  */
 export function dueDocuments(today: string): DueDocument[] {
   const byKey = new Map<string, DueDocument>();
@@ -78,7 +78,7 @@ export const TodayDocumentsCard: React.FC<TodayDocumentsCardProps> = ({ today, r
           <p className="text-sm text-slate-700 dark:text-slate-200">
             {due.length === 1 ? 'A document in your vault' : `${due.length} documents in your vault`}{' '}
             {expired > 0 && expired === due.length ? (due.length === 1 ? 'has expired' : 'have expired') : 'expire soon'}.
-            {' '}Unlock the vault to see {due.length === 1 ? 'it' : 'them'}.
+            {' '}Open Documents to see {due.length === 1 ? 'it' : 'them'}.
           </p>
         )}
         {reminderNote && <p className="text-[11px] text-slate-500 dark:text-slate-400">{reminderNote}</p>}

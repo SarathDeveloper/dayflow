@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  DayflowAlarmPlugin.shareBackup shares files it writes to cache/backups/, and
+  DayflowAlarmPlugin.shareBackup shares files it writes to cache/backups/,
   DayflowUpdatePlugin hands the downloaded update in cache/updates/ to the
-  installer. Keep it that narrow: an external-path or a cache root would let a
+  installer, and DocumentVaultPlugin.shareFile shares one decrypted document from
+  cache/shared/ (deleted 15 minutes later). Keep it that narrow: an external-path or a cache root would let a
   shared URI reach far more than those files.
 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="backups" path="backups/" />
     <cache-path name="updates" path="updates/" />
+    <cache-path name="shared" path="shared/" />
 </paths>

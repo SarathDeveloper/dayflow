@@ -1,17 +1,32 @@
 package com.dayflow.dailytasks;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.pdf.PdfDocument;
 import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
+import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
+import android.print.PageRange;
+import android.print.PrintAttributes;
+import android.print.PrintDocumentAdapter;
+import android.print.PrintDocumentInfo;
+import android.print.PrintManager;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
+import androidx.core.content.FileProvider;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -51,6 +66,14 @@ import java.util.regex.Pattern;
  * so it is written through a Storage Access Framework document in UTF-8 text
  * chunks: beginExport (picker) -> appendExport* -> finishExport, or abortExport,
  * which closes and deletes the partial document.
+ *
+ * Files out (save a copy, share, print): the web layer decrypts one document and
+ * streams it with beginFile -> appendFile* into cache/shared/ (the only cache
+ * folder FileProvider exposes for this), then calls saveFile, shareFile or
+ * printFile, or discardFile. Saved and printed copies are deleted as soon as they
+ * are written. A shared copy must outlive the share sheet (the receiving app
+ * reads it later), so shared copies are deleted once older than
+ * SHARED_MAX_AGE_MS, checked when the plugin loads and on every new file.
  */
 @CapacitorPlugin(name = "DocumentVault")
 public class DocumentVaultPlugin extends Plugin {
@@ -60,9 +83,19 @@ public class DocumentVaultPlugin extends Plugin {
     /** Base64 length of a 1 MiB chunk, plus slack for padding and line breaks. */
     private static final int MAX_PDF_CHUNK_CHARS = 1_400_000;
     private static final int MAX_OPEN_PDFS = 8;
-    private static final int MAX_RENDER_WIDTH = 2000;
+    private static final int MAX_RENDER_WIDTH = 3000;
     private static final int MIN_RENDER_WIDTH = 16;
-    private static final int MAX_RENDER_HEIGHT = 3000;
+    private static final int MAX_RENDER_HEIGHT = 6000;
+    /** About 36 MB as ARGB_8888: zoomed pages stay sharp without exhausting memory. */
+    private static final long MAX_RENDER_PIXELS = 9_000_000L;
+
+    private static final String SHARED_DIR = "shared";
+    private static final long MAX_FILE_BYTES = 10L * 1024 * 1024;
+    private static final int MAX_OPEN_FILES = 4;
+    private static final long SHARED_MAX_AGE_MS = 15L * 60 * 1000;
+    /** Largest side an image is decoded at for printing. */
+    private static final int MAX_PRINT_IMAGE_SIDE = 3000;
+    private static final Pattern FILE_MIME_PATTERN = Pattern.compile("^(application/pdf|image/(jpeg|png))$");
 
     private static final long MAX_EXPORT_BYTES = 256L * 1024 * 1024;
     private static final int MAX_EXPORT_CHUNK_CHARS = 4 * 1024 * 1024;
@@ -74,6 +107,7 @@ public class DocumentVaultPlugin extends Plugin {
 
     private final Map<String, PdfSession> pdfs = new ConcurrentHashMap<>();
     private final Map<String, ExportSession> exports = new ConcurrentHashMap<>();
+    private final Map<String, FileSession> files = new ConcurrentHashMap<>();
     private final Object tempLock = new Object();
     private ExecutorService executor;
 
@@ -133,16 +167,58 @@ public class DocumentVaultPlugin extends Plugin {
         }
     }
 
+    /** One decrypted file being written for save, share or print. All access is synchronized on the session. */
+    private static final class FileSession {
+        final File dir;
+        final File file;
+        OutputStream output;
+        long size;
+        boolean handedOff;
+
+        FileSession(File dir, File file, OutputStream output) {
+            this.dir = dir;
+            this.file = file;
+            this.output = output;
+        }
+
+        boolean closeOutput() {
+            if (output == null) return true;
+            try {
+                output.close();
+                output = null;
+                return true;
+            } catch (IOException error) {
+                output = null;
+                return false;
+            }
+        }
+
+        void delete() {
+            closeOutput();
+            deleteTree(dir);
+        }
+    }
+
     @Override
     public void load() {
         super.load();
         executor = Executors.newFixedThreadPool(2);
         executor.execute(this::clearTempDir);
+        executor.execute(() -> sweepSharedDir(SHARED_MAX_AGE_MS));
     }
 
     @Override
     protected void handleOnDestroy() {
         closeAllPdfSessions();
+        for (String handle : new ArrayList<>(files.keySet())) {
+            FileSession session = files.remove(handle);
+            if (session != null) {
+                synchronized (session) {
+                    // A shared copy may still be read by the receiving app; the age sweep removes it.
+                    if (!session.handedOff) session.delete();
+                }
+            }
+        }
         for (String token : new ArrayList<>(exports.keySet())) {
             ExportSession session = exports.remove(token);
             if (session != null) {
@@ -308,6 +384,11 @@ public class DocumentVaultPlugin extends Plugin {
                         width = (int) Math.max(1, Math.round((double) width * MAX_RENDER_HEIGHT / height));
                         height = MAX_RENDER_HEIGHT;
                     }
+                    if ((long) width * height > MAX_RENDER_PIXELS) {
+                        double scale = Math.sqrt((double) MAX_RENDER_PIXELS / ((long) width * height));
+                        width = (int) Math.max(1, Math.floor(width * scale));
+                        height = (int) Math.max(1, Math.floor(height * scale));
+                    }
                     bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                     bitmap.eraseColor(Color.WHITE);
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
@@ -338,6 +419,41 @@ public class DocumentVaultPlugin extends Plugin {
                     }
                     if (bitmap != null) bitmap.recycle();
                 }
+            }
+        });
+    }
+
+    /** Every page's size in PDF points, so the viewer can lay out pages before rendering them. */
+    @PluginMethod
+    public void pdfPageSizes(PluginCall call) {
+        run(call, () -> {
+            String handle = call.getString("handle");
+            PdfSession session = pdfSession(call, handle);
+            if (session == null) return;
+            synchronized (session) {
+                if (session.closed || session.renderer == null) {
+                    call.reject(session.closed ? "This document was closed." : "Open the document first.");
+                    return;
+                }
+                JSArray sizes = new JSArray();
+                try {
+                    int pageCount = session.renderer.getPageCount();
+                    for (int index = 0; index < pageCount; index++) {
+                        PdfRenderer.Page page = session.renderer.openPage(index);
+                        try {
+                            JSObject size = new JSObject();
+                            size.put("width", Math.max(1, page.getWidth()));
+                            size.put("height", Math.max(1, page.getHeight()));
+                            sizes.put(size);
+                        } finally {
+                            page.close();
+                        }
+                    }
+                } catch (RuntimeException error) {
+                    call.reject("Could not read the pages of this PDF.");
+                    return;
+                }
+                call.resolve(new JSObject().put("sizes", sizes));
             }
         });
     }
@@ -511,6 +627,344 @@ public class DocumentVaultPlugin extends Plugin {
         });
     }
 
+    // --------------------------------------------------- Files out (save, share, print)
+
+    @PluginMethod
+    public void beginFile(PluginCall call) {
+        run(call, () -> {
+            sweepSharedDir(SHARED_MAX_AGE_MS);
+            if (files.size() >= MAX_OPEN_FILES) {
+                call.reject("Another document is still being prepared. Try again in a moment.");
+                return;
+            }
+            String handle = UUID.randomUUID().toString();
+            try {
+                File dir = new File(sharedDir(), UUID.randomUUID().toString());
+                if (!dir.mkdirs() && !dir.isDirectory()) throw new IOException("No folder.");
+                File file = new File(dir, "document.tmp");
+                files.put(handle, new FileSession(dir, file, new BufferedOutputStream(new FileOutputStream(file))));
+            } catch (IOException | SecurityException error) {
+                call.reject("Could not prepare the document on this device.");
+                return;
+            }
+            call.resolve(new JSObject().put("handle", handle));
+        });
+    }
+
+    @PluginMethod
+    public void appendFile(PluginCall call) {
+        run(call, () -> {
+            String handle = call.getString("handle");
+            FileSession session = fileSession(call, handle);
+            if (session == null) return;
+            String chunk = call.getString("chunk");
+            if (chunk == null || chunk.isEmpty() || chunk.length() > MAX_PDF_CHUNK_CHARS) {
+                call.reject("The document data is invalid.");
+                return;
+            }
+            byte[] bytes;
+            try {
+                bytes = Base64.decode(chunk, Base64.DEFAULT);
+            } catch (IllegalArgumentException error) {
+                call.reject("The document data is invalid.");
+                return;
+            }
+            synchronized (session) {
+                if (session.output == null) {
+                    call.reject("This document is no longer being prepared.");
+                    return;
+                }
+                if (bytes.length == 0 || bytes.length > MAX_PDF_CHUNK_BYTES || session.size + bytes.length > MAX_FILE_BYTES) {
+                    dropFile(handle, session);
+                    call.reject("The document is too large.");
+                    return;
+                }
+                try {
+                    session.output.write(bytes);
+                    session.size += bytes.length;
+                } catch (IOException error) {
+                    dropFile(handle, session);
+                    call.reject("Could not prepare the document on this device. Free some storage and try again.");
+                    return;
+                }
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void discardFile(PluginCall call) {
+        String handle = call.getString("handle");
+        if (!isId(handle)) {
+            call.reject("Unknown document.");
+            return;
+        }
+        run(call, () -> {
+            discardQuietly(handle);
+            call.resolve();
+        });
+    }
+
+    /** Saves the prepared file where the user picks (system "save as" screen). Resolves { saved }. */
+    @PluginMethod
+    public void saveFile(PluginCall call) {
+        String handle = call.getString("handle");
+        String filename = safeFilename(call.getString("filename"));
+        String mimeType = call.getString("mimeType");
+        FileSession session = isId(handle) ? files.get(handle) : null;
+        if (session == null || filename == null || mimeType == null || !FILE_MIME_PATTERN.matcher(mimeType).matches()) {
+            if (session != null) discardQuietly(handle);
+            call.reject("The document to save is invalid.");
+            return;
+        }
+        if (!finishWriting(handle, session)) {
+            call.reject("Could not prepare the document on this device.");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mimeType);
+        intent.putExtra(Intent.EXTRA_TITLE, filename);
+        try {
+            startActivityForResult(call, intent, "saveFileCreated");
+        } catch (RuntimeException error) {
+            discardQuietly(handle);
+            call.reject("Could not open the file picker on this device.");
+        }
+    }
+
+    @ActivityCallback
+    private void saveFileCreated(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        String handle = call.getString("handle");
+        FileSession session = isId(handle) ? files.remove(handle) : null;
+        if (session == null) {
+            call.reject("The document is no longer prepared. Try again.");
+            return;
+        }
+        Uri uri = result.getResultCode() == Activity.RESULT_OK && result.getData() != null ? result.getData().getData() : null;
+        if (uri == null) {
+            synchronized (session) {
+                session.delete();
+            }
+            call.resolve(new JSObject().put("saved", false));
+            return;
+        }
+        run(call, () -> {
+            synchronized (session) {
+                try (InputStream input = new FileInputStream(session.file); OutputStream output = openExportStream(uri)) {
+                    copy(input, output);
+                } catch (IOException | SecurityException | IllegalArgumentException error) {
+                    deleteDocument(uri);
+                    call.reject("Could not save the document to that location.");
+                    return;
+                } finally {
+                    session.delete();
+                }
+            }
+            call.resolve(new JSObject().put("saved", true));
+        });
+    }
+
+    /** Opens the share sheet for the prepared file. */
+    @PluginMethod
+    public void shareFile(PluginCall call) {
+        String handle = call.getString("handle");
+        String filename = safeFilename(call.getString("filename"));
+        String mimeType = call.getString("mimeType");
+        String title = call.getString("title", "Share document");
+        FileSession session = isId(handle) ? files.remove(handle) : null;
+        if (session == null || filename == null || mimeType == null || !FILE_MIME_PATTERN.matcher(mimeType).matches()) {
+            if (session != null) {
+                synchronized (session) {
+                    session.delete();
+                }
+            }
+            call.reject("The document to share is invalid.");
+            return;
+        }
+        run(call, () -> {
+            File named;
+            synchronized (session) {
+                if (!session.closeOutput() || session.size == 0) {
+                    session.delete();
+                    call.reject("Could not prepare the document on this device.");
+                    return;
+                }
+                named = new File(session.dir, filename);
+                if (!session.file.renameTo(named)) {
+                    session.delete();
+                    call.reject("Could not prepare the document on this device.");
+                    return;
+                }
+                session.handedOff = true;
+            }
+            Context context = getContext();
+            Uri uri;
+            try {
+                uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", named);
+            } catch (IllegalArgumentException error) {
+                deleteTree(session.dir);
+                call.reject("Could not share the document.");
+                return;
+            }
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType(mimeType);
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            send.setClipData(ClipData.newRawUri(filename, uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            String chooserTitle = title == null || title.trim().isEmpty() ? "Share document" : title.trim();
+            Intent chooser = Intent.createChooser(send, chooserTitle);
+            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getActivity().runOnUiThread(() -> {
+                try {
+                    getActivity().startActivity(chooser);
+                    call.resolve();
+                } catch (RuntimeException error) {
+                    deleteTree(session.dir);
+                    call.reject("No app on this device can receive the document.");
+                }
+            });
+        });
+    }
+
+    /** Prints the prepared file with the system print dialog. An image is placed on a page first. */
+    @PluginMethod
+    public void printFile(PluginCall call) {
+        String handle = call.getString("handle");
+        String mimeType = call.getString("mimeType");
+        String jobName = safeFilename(call.getString("jobName", "Dayflow document"));
+        FileSession session = isId(handle) ? files.remove(handle) : null;
+        if (session == null || mimeType == null || !FILE_MIME_PATTERN.matcher(mimeType).matches()) {
+            if (session != null) {
+                synchronized (session) {
+                    session.delete();
+                }
+            }
+            call.reject("The document to print is invalid.");
+            return;
+        }
+        String name = jobName == null ? "Dayflow document" : jobName;
+        run(call, () -> {
+            File pdf;
+            synchronized (session) {
+                if (!session.closeOutput() || session.size == 0) {
+                    session.delete();
+                    call.reject("Could not prepare the document on this device.");
+                    return;
+                }
+                if (mimeType.equals("application/pdf")) {
+                    pdf = session.file;
+                } else {
+                    pdf = new File(session.dir, "print.pdf");
+                    try {
+                        imageToPdf(session.file, pdf);
+                    } catch (IOException | OutOfMemoryError | RuntimeException error) {
+                        session.delete();
+                        call.reject("Could not prepare this image for printing.");
+                        return;
+                    }
+                }
+            }
+            getActivity().runOnUiThread(() -> {
+                try {
+                    PrintManager manager = (PrintManager) getActivity().getSystemService(Context.PRINT_SERVICE);
+                    if (manager == null) throw new IllegalStateException("No print service.");
+                    manager.print(name, new FilePrintAdapter(pdf, name, () -> deleteTree(session.dir)),
+                            new PrintAttributes.Builder().build());
+                    call.resolve();
+                } catch (RuntimeException error) {
+                    deleteTree(session.dir);
+                    call.reject("Printing is not available on this device.");
+                }
+            });
+        });
+    }
+
+    /** Streams a finished PDF file to the print framework, then deletes it. */
+    private static final class FilePrintAdapter extends PrintDocumentAdapter {
+        private final File file;
+        private final String name;
+        private final Runnable onDone;
+
+        FilePrintAdapter(File file, String name, Runnable onDone) {
+            this.file = file;
+            this.name = name;
+            this.onDone = onDone;
+        }
+
+        @Override
+        public void onLayout(PrintAttributes oldAttributes, PrintAttributes newAttributes, CancellationSignal cancellationSignal,
+                             LayoutResultCallback callback, Bundle extras) {
+            if (cancellationSignal.isCanceled()) {
+                callback.onLayoutCancelled();
+                return;
+            }
+            PrintDocumentInfo info = new PrintDocumentInfo.Builder(name.endsWith(".pdf") ? name : name + ".pdf")
+                    .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                    .build();
+            callback.onLayoutFinished(info, true);
+        }
+
+        @Override
+        public void onWrite(PageRange[] pages, ParcelFileDescriptor destination, CancellationSignal cancellationSignal,
+                            WriteResultCallback callback) {
+            try (InputStream input = new FileInputStream(file);
+                 OutputStream output = new FileOutputStream(destination.getFileDescriptor())) {
+                copy(input, output);
+                if (cancellationSignal.isCanceled()) {
+                    callback.onWriteCancelled();
+                } else {
+                    callback.onWriteFinished(new PageRange[] { PageRange.ALL_PAGES });
+                }
+            } catch (IOException | RuntimeException error) {
+                callback.onWriteFailed("Could not read the document.");
+            }
+        }
+
+        @Override
+        public void onFinish() {
+            onDone.run();
+        }
+    }
+
+    /** Places an image on one A4 page (aspect ratio kept, 24 pt margins). */
+    private static void imageToPdf(File image, File pdf) throws IOException {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(image.getPath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new IOException("Not an image.");
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = 1;
+        while (Math.max(bounds.outWidth, bounds.outHeight) / options.inSampleSize > MAX_PRINT_IMAGE_SIDE) {
+            options.inSampleSize *= 2;
+        }
+        Bitmap bitmap = BitmapFactory.decodeFile(image.getPath(), options);
+        if (bitmap == null) throw new IOException("Not an image.");
+        PdfDocument document = new PdfDocument();
+        try {
+            int pageWidth = 595;
+            int pageHeight = 842;
+            int margin = 24;
+            PdfDocument.Page page = document.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create());
+            Canvas canvas = page.getCanvas();
+            double scale = Math.min((double) (pageWidth - 2 * margin) / bitmap.getWidth(),
+                    (double) (pageHeight - 2 * margin) / bitmap.getHeight());
+            int width = (int) Math.round(bitmap.getWidth() * scale);
+            int height = (int) Math.round(bitmap.getHeight() * scale);
+            int left = (pageWidth - width) / 2;
+            int top = (pageHeight - height) / 2;
+            canvas.drawBitmap(bitmap, null, new Rect(left, top, left + width, top + height), null);
+            document.finishPage(page);
+            try (OutputStream output = new FileOutputStream(pdf)) {
+                document.writeTo(output);
+            }
+        } finally {
+            document.close();
+            bitmap.recycle();
+        }
+    }
+
     // ------------------------------------------------------------- Helpers
 
     /** Runs heavy work off the UI and bridge threads; never leaves a call unanswered. */
@@ -587,6 +1041,80 @@ public class DocumentVaultPlugin extends Plugin {
             }
         }
     }
+
+    private FileSession fileSession(PluginCall call, String handle) {
+        FileSession session = isId(handle) ? files.get(handle) : null;
+        if (session == null) call.reject("This document is no longer being prepared. Try again.");
+        return session;
+    }
+
+    /** Must be called while holding the session's lock. */
+    private void dropFile(String handle, FileSession session) {
+        files.remove(handle);
+        session.delete();
+    }
+
+    private void discardQuietly(String handle) {
+        FileSession session = files.remove(handle);
+        if (session != null) {
+            synchronized (session) {
+                session.delete();
+            }
+        }
+    }
+
+    /** Closes the output stream before the file leaves the plugin. */
+    private boolean finishWriting(String handle, FileSession session) {
+        synchronized (session) {
+            if (session.closeOutput() && session.size > 0) return true;
+            dropFile(handle, session);
+            return false;
+        }
+    }
+
+    private File sharedDir() throws IOException {
+        File dir = new File(getContext().getCacheDir(), SHARED_DIR);
+        if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) throw new IOException("Could not create the shared folder.");
+        return dir;
+    }
+
+    /** Deletes shared copies older than `maxAgeMs` that no open session is still writing. */
+    private void sweepSharedDir(long maxAgeMs) {
+        File dir = new File(getContext().getCacheDir(), SHARED_DIR);
+        File[] entries = dir.listFiles();
+        if (entries == null) return;
+        ArrayList<String> active = new ArrayList<>();
+        for (FileSession session : files.values()) active.add(session.dir.getName());
+        long now = System.currentTimeMillis();
+        for (File entry : entries) {
+            if (active.contains(entry.getName())) continue;
+            if (now - entry.lastModified() >= maxAgeMs) deleteTree(entry);
+        }
+    }
+
+    private static void deleteTree(File file) {
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) deleteTree(child);
+        }
+        if (file.exists() && !file.delete()) file.deleteOnExit();
+    }
+
+    /** A plain file name: no folders or reserved characters, at most MAX_FILENAME characters. */
+    private static String safeFilename(String value) {
+        if (value == null) return null;
+        String cleaned = value.replaceAll("[\\\\/\\p{Cntrl}:*?\"<>|]", "_").trim();
+        if (cleaned.isEmpty() || cleaned.equals(".") || cleaned.equals("..")) return null;
+        return cleaned.length() > MAX_FILENAME ? cleaned.substring(cleaned.length() - MAX_FILENAME) : cleaned;
+    }
+
+    private static void copy(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        int count;
+        while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+        output.flush();
+    }
+
 
     private static boolean hasPdfMagic(File file) {
         byte[] header = new byte[PDF_MAGIC.length];

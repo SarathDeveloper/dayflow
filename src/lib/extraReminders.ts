@@ -39,7 +39,7 @@ export const EXTRA_REMINDER_HOUR = 9;
 /** Most extra reminders kept scheduled at once (the soonest win). */
 export const MAX_EXTRA_REMINDERS = 64;
 
-/** Route delivered for every document reminder: the vault always needs unlocking first. */
+/** Route delivered for every document reminder: it opens the Documents screen. */
 export const DOCUMENTS_ROUTE = 'documents';
 
 /** Prefix of the route delivered for a maintenance reminder (`maintenance:<itemId>`). */
@@ -188,9 +188,9 @@ export function documentReminderText(daysLeft: number, label?: string): { title:
   const phrase = documentExpiryPhrase(daysLeft);
   const name = cleanText(label, MAX_LABEL_LENGTH);
   if (name) {
-    return { title: 'Document reminder', body: `${name} ${phrase}. Unlock the vault to see it.` };
+    return { title: 'Document reminder', body: `${name} ${phrase}. Open Documents to see it.` };
   }
-  return { title: 'Document reminder', body: `A document in your vault ${phrase}. Unlock the vault to see it.` };
+  return { title: 'Document reminder', body: `A document in your vault ${phrase}. Open Documents to see it.` };
 }
 
 /** Text of a maintenance reminder, e.g. "Honda City: Engine oil change is due in 3 days". */

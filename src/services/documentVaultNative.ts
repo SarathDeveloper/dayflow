@@ -13,6 +13,8 @@ export interface DocumentVaultNativePlugin {
   openPdf(options: { handle: string }): Promise<{ pageCount: number }>;
   /** `page` is 0-based and clamped to the document; `width` is clamped to 16..2000 px. */
   renderPdfPage(options: { handle: string; page: number; width: number }): Promise<{ png: string; width: number; height: number }>;
+  /** Every page's size in PDF points (APK 1.2+). */
+  pdfPageSizes(options: { handle: string }): Promise<{ sizes: { width: number; height: number }[] }>;
   /** Closing a handle that is already closed succeeds. */
   closePdf(options: { handle: string }): Promise<void>;
   closeAllPdfs(): Promise<void>;
@@ -23,7 +25,30 @@ export interface DocumentVaultNativePlugin {
   finishExport(options: { token: string }): Promise<void>;
   /** Closes and deletes the partial document. Aborting an export that already ended succeeds. */
   abortExport(options: { token: string }): Promise<void>;
+  // Files out (APK 1.2+): stream one decrypted document, then save, share or print it.
+  beginFile(): Promise<{ handle: string }>;
+  /** `chunk` is base64, at most 1 MiB once decoded. */
+  appendFile(options: { handle: string; chunk: string }): Promise<void>;
+  /** System "save as" screen. `saved` is false when the user cancelled. */
+  saveFile(options: { handle: string; filename: string; mimeType: string }): Promise<{ saved: boolean }>;
+  /** Share sheet. Resolves once it is shown. */
+  shareFile(options: { handle: string; filename: string; mimeType: string; title: string }): Promise<void>;
+  /** System print dialog. Resolves once it is shown. */
+  printFile(options: { handle: string; mimeType: string; jobName: string }): Promise<void>;
+  discardFile(options: { handle: string }): Promise<void>;
 }
+
+export type NativeFileAction =
+  | { kind: 'save'; filename: string; mimeType: string }
+  | { kind: 'share'; filename: string; mimeType: string; title: string }
+  | { kind: 'print'; mimeType: string; jobName: string };
+
+/** Capacitor rejects with this code when the installed app predates a native method. */
+export function isUnimplemented(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'UNIMPLEMENTED';
+}
+
+export const UPDATE_APP_MESSAGE = 'Install the latest Dayflow app update to use this.';
 
 export const DocumentVaultNative = registerPlugin<DocumentVaultNativePlugin>('DocumentVault');
 
@@ -108,6 +133,65 @@ export async function openPdfWith(
  */
 export async function openNativePdf(bytes: Uint8Array): Promise<{ handle: string; pageCount: number }> {
   return openPdfWith(DocumentVaultNative, bytes);
+}
+
+/**
+ * Testable core of {@link sendFileNative}: streams `bytes` to the plugin, then
+ * runs `action`. On failure the prepared copy is discarded. Returns false only
+ * when the user cancelled a save.
+ */
+export async function sendFileWith(
+  plugin: Pick<DocumentVaultNativePlugin, 'beginFile' | 'appendFile' | 'saveFile' | 'shareFile' | 'printFile' | 'discardFile'>,
+  bytes: Uint8Array,
+  action: NativeFileAction,
+): Promise<boolean> {
+  if (bytes.length === 0) throw new Error('This document is empty.');
+  if (bytes.length > NATIVE_PDF_MAX_BYTES) throw new Error('This document is larger than 10 MB.');
+  let handle: string;
+  try {
+    ({ handle } = await plugin.beginFile());
+  } catch (error) {
+    if (isUnimplemented(error)) throw new Error(UPDATE_APP_MESSAGE);
+    throw userError(error, 'Could not prepare the document on this device.');
+  }
+  try {
+    for (let offset = 0; offset < bytes.length; offset += NATIVE_PDF_CHUNK_BYTES) {
+      await plugin.appendFile({ handle, chunk: bytesToBase64(bytes.subarray(offset, offset + NATIVE_PDF_CHUNK_BYTES)) });
+    }
+  } catch (error) {
+    await plugin.discardFile({ handle }).catch(() => undefined);
+    throw userError(error, 'Could not prepare the document on this device.');
+  }
+  // From here the plugin owns the copy and deletes it, also when the action fails.
+  try {
+    if (action.kind === 'save') {
+      const { saved } = await plugin.saveFile({ handle, filename: action.filename, mimeType: action.mimeType });
+      return saved;
+    }
+    if (action.kind === 'share') {
+      await plugin.shareFile({ handle, filename: action.filename, mimeType: action.mimeType, title: action.title });
+      return true;
+    }
+    await plugin.printFile({ handle, mimeType: action.mimeType, jobName: action.jobName });
+    return true;
+  } catch (error) {
+    throw userError(error, action.kind === 'print' ? 'Could not print the document.' : 'Could not hand over the document.');
+  }
+}
+
+/** Saves, shares or prints one decrypted document through the Android app. */
+export async function sendFileNative(bytes: Uint8Array, action: NativeFileAction): Promise<boolean> {
+  return sendFileWith(DocumentVaultNative, bytes, action);
+}
+
+/** Page sizes in points, or null when the installed app cannot report them. */
+export async function nativePdfPageSizes(handle: string): Promise<{ width: number; height: number }[] | null> {
+  try {
+    const { sizes } = await DocumentVaultNative.pdfPageSizes({ handle });
+    return Array.isArray(sizes) && sizes.every((size) => size.width > 0 && size.height > 0) ? sizes : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Testable core of {@link exportTextNative}. */

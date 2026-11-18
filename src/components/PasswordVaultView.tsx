@@ -32,7 +32,7 @@ import {
 import { todayString } from '../lib/ledger';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
-import { inputClass, labelClass, SyncPill } from './vault/VaultParts';
+import { fallbackTitle, inputClass, labelClass, SyncPill } from './vault/VaultParts';
 import { VaultEditor } from './vault/VaultEditor';
 import { VaultDetails } from './vault/VaultDetails';
 import { TRASH_DAYS, VaultHealthPanel, VaultList, VaultSettingsPanel, VaultTrashPanel } from './vault/VaultPanels';
@@ -410,7 +410,7 @@ export default function PasswordVaultView() {
     void run(async (isCurrent) => {
       const id = draft.id || crypto.randomUUID();
       const previous = isNew ? undefined : entries.find((item) => item.id === id);
-      const clean = checkVaultEntry({ ...draft, id, title: draft.title.trim() });
+      const clean = checkVaultEntry({ ...draft, id, title: draft.title.trim() || fallbackTitle(draft) });
       await saveItems([applyEntryEdit(previous, clean, now())], isCurrent);
       if (isCurrent()) setScreen({ name: 'details', id });
     });

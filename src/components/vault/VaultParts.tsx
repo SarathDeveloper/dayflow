@@ -227,6 +227,23 @@ export function SyncPill({ configured, signedIn, sync, syncedAt, syncing, onSync
   );
 }
 
+/** "accounts.google.com" from a typed website, "" if it is not a host. */
+export function siteName(website: string): string {
+  const url = openableUrl(website);
+  if (!url) return '';
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '');
+  } catch {
+    return '';
+  }
+}
+
+/** Name used when a login is saved without one: the site, else the username. */
+export function fallbackTitle(entry: VaultEntry): string {
+  if (kindOf(entry) !== 'login') return '';
+  return siteName(entry.website) || entry.username.trim();
+}
+
 /** Adds https:// to a bare host; returns null for anything that is not http(s). */
 export function openableUrl(website: string): string | null {
   const value = website.trim();

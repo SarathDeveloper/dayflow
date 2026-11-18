@@ -85,6 +85,7 @@ import { AppLockScreen } from './components/AppLockScreen';
 import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
 import { dismissTopDialog, setDialogsSuspended, showAlert, showConfirm } from './components/ui/AppDialog';
+import { closeTopOverlay } from './lib/overlayBack';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
 import { NotificationService } from './services/notificationService';
@@ -1490,6 +1491,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
   backHandlerRef.current = () => {
     // An open alert or confirmation closes first, as if cancelled.
     if (dismissTopDialog()) return;
+    // Then a full-screen overlay inside a screen (the document viewer).
+    if (closeTopOverlay()) return;
     if (reportWeek) {
       setReportWeek(null);
       return;

@@ -49,6 +49,7 @@ import {
 } from '../services/cloudSyncService';
 import { clearHomeWidgets } from '../services/homeWidgets';
 import { forgetSyncedVault, hasPasswordVault, syncPasswordVault } from '../services/passwordVault';
+import { syncDocumentVault } from '../services/documentSync';
 
 export type CloudSyncStatus = 'unconfigured' | 'disconnected' | 'idle' | 'syncing' | 'error';
 
@@ -246,6 +247,8 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           setError(null);
           // The password vault syncs its encrypted rows on its own; it never blocks this sync.
           if (hasPasswordVault()) void syncPasswordVault();
+          // So does the document vault.
+          void syncDocumentVault();
         } catch (e) {
           if (e instanceof CloudAuthError) {
             // The server rejected the session. Sign out so the login screen

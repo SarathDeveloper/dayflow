@@ -51,7 +51,8 @@ export default defineConfig(({mode}) => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          // mjs: the pdf.js worker, so encrypted documents still open offline.
+          globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff2}'],
           navigateFallback: 'index.html',
           // /supabase/* is the Vercel proxy to the Supabase project (see
           // vercel.json). The service worker must never answer it with the app.

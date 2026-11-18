@@ -2,9 +2,14 @@
  * Document Vault: encrypted copies of important documents (PDF, JPEG, PNG) with
  * expiry dates and reminders.
  *
- * Key hierarchy: the vault HEADER is a password-vault `VaultFile` with zero entries.
- * It holds the Argon2id salt and the data key wrapped by the passphrase, so the
- * proven `createVault` / `openVault` code does the key work. The data key then
+ * Keys. Envelope version 2 (the current one) has no passphrase: its header holds
+ * the random vault id and the data key itself (account mode, like the password
+ * vault), so documents open without an unlock step and sync can merge in the
+ * background. The key travels with the synced envelope, so this is not end-to-end
+ * encryption. Version 1 envelopes (older devices, and every backup file) hold a
+ * password-vault `VaultFile` header instead: the data key wrapped by a passphrase
+ * with Argon2id. `upgradeDocumentVault` turns one into version 2 with the same id
+ * and key, and a backup wraps the key under a backup password again. The data key
  * encrypts, with AES-GCM and authenticated context (AAD):
  *   - the index (titles, categories, links, revisions, filenames, expiry dates,
  *     reminder offsets) under `dayflow-documents:v1:<vaultId>:index`
@@ -17,12 +22,15 @@ import type { DocumentReminderEntry } from './extraReminders';
 import {
   base64ToBytes,
   bytesToBase64,
-  createVault,
   decryptVaultBytes,
   encryptVaultBytes,
+  importVaultKey,
   isStrictBase64,
   openVault,
   readVaultFile,
+  sealEntries,
+  vaultKeyBytes,
+  wrapVaultFileKey,
   type VaultFile,
 } from './passwordVault';
 
@@ -50,22 +58,42 @@ const MAX_REMINDER_DAY = 365;
 /** AES-GCM authentication tag appended to every ciphertext. */
 const TAG_BYTES = 16;
 const MAX_ATTACHMENTS = DOCUMENT_LIMITS.maxDocuments * DOCUMENT_LIMITS.maxRevisionsPerDocument;
+/** Deletion records kept in the index (newest first). */
+export const MAX_DELETED_DOCUMENTS = 1000;
 
 export const DEFAULT_DOCUMENT_REMINDER_DAYS: number[] = [30, 7];
 
 export type DocumentMime = 'application/pdf' | 'image/jpeg' | 'image/png';
 export const DOCUMENT_MIME_TYPES: readonly DocumentMime[] = ['application/pdf', 'image/jpeg', 'image/png'];
 
-export interface DocumentRevision {
-  id: string;
+/** One stored file. A revision's own fields are its front (or only) side. */
+export interface DocumentSide {
   filename: string;
   mimeType: DocumentMime;
   /** Plaintext size in bytes. */
   size: number;
   attachmentId: string;
+}
+
+export interface DocumentRevision extends DocumentSide {
+  id: string;
   addedAt: string;
   expiresOn?: string;
   note?: string;
+  /** Optional back side (ID cards: Aadhaar, PAN, licence, bank cards...). */
+  back?: DocumentSide;
+}
+
+/** Every file of a revision: the front, then the back when there is one. */
+export function revisionSides(revision: DocumentRevision): { side: 'front' | 'back'; file: DocumentSide }[] {
+  const sides: { side: 'front' | 'back'; file: DocumentSide }[] = [{ side: 'front', file: revision }];
+  if (revision.back) sides.push({ side: 'back', file: revision.back });
+  return sides;
+}
+
+/** Plaintext bytes of a revision (both sides). */
+export function revisionSize(revision: DocumentRevision): number {
+  return revision.size + (revision.back?.size ?? 0);
 }
 
 export interface VaultDocument {
@@ -88,17 +116,33 @@ export interface VaultDocument {
 export interface DocumentIndex {
   version: 1;
   showReminderTitles: boolean;
+  /** When `showReminderTitles` last changed (sync merges it on this). */
+  settingsUpdatedAt?: string;
   documents: VaultDocument[];
+  /**
+   * Deleted document ids with the deletion time, so a sync merge does not bring a
+   * deleted document back from another device. Only the newest are kept.
+   */
+  deletedDocuments?: Record<string, string>;
 }
 
-export interface DocumentEnvelope {
+/** Version 2 header: the vault id and its data key (base64, 32 bytes). */
+export interface DocumentKeyHeader {
+  id: string;
+  key: string;
+}
+
+interface EnvelopeFields {
   format: 'dayflow-documents';
-  version: 1;
   /** Random per commit; storage refuses a commit whose expected revision is stale. */
   revision: string;
-  header: VaultFile;
   index: { nonce: string; ciphertext: string };
 }
+
+/** Version 1: passphrase-wrapped key (older vaults and backup files). Version 2: account key. */
+export type DocumentEnvelope =
+  | (EnvelopeFields & { version: 1; header: VaultFile })
+  | (EnvelopeFields & { version: 2; header: DocumentKeyHeader });
 
 export interface StoredBlob {
   nonce: string;
@@ -275,9 +319,9 @@ function readLinkId(value: unknown, label: string): string | undefined {
   return value;
 }
 
-function readRevision(value: unknown): DocumentRevision {
+function readSide(value: unknown): DocumentSide {
   if (!isObject(value)) fail('A document revision is damaged.');
-  if (!isDocumentId(value.id) || !isDocumentId(value.attachmentId)) fail('A document revision has an invalid id.');
+  if (!isDocumentId(value.attachmentId)) fail('A document revision has an invalid id.');
   if (typeof value.mimeType !== 'string' || !DOCUMENT_MIME_TYPES.includes(value.mimeType as DocumentMime)) {
     fail('A document revision has an unsupported file type.');
   }
@@ -286,14 +330,20 @@ function readRevision(value: unknown): DocumentRevision {
   if (typeof value.size !== 'number' || !Number.isInteger(value.size) || value.size < 1 || value.size > DOCUMENT_LIMITS.maxFileBytes) {
     fail(`A file must be between 1 byte and ${formatFileSize(DOCUMENT_LIMITS.maxFileBytes)}.`);
   }
+  return { filename, mimeType, size: value.size, attachmentId: value.attachmentId };
+}
+
+function readRevision(value: unknown): DocumentRevision {
+  if (!isObject(value)) fail('A document revision is damaged.');
+  if (!isDocumentId(value.id)) fail('A document revision has an invalid id.');
+  const front = readSide(value);
   if (!isTimestamp(value.addedAt)) fail('A document revision has an invalid date.');
   if (value.expiresOn !== undefined && !isValidLocalDate(value.expiresOn)) fail('Choose a valid expiry date.');
   const note = value.note === undefined ? undefined : readText(value.note, 'The revision note', MAX_NOTE, false);
-  const revision: DocumentRevision = {
-    id: value.id, filename, mimeType, size: value.size, attachmentId: value.attachmentId, addedAt: value.addedAt,
-  };
+  const revision: DocumentRevision = { id: value.id, ...front, addedAt: value.addedAt };
   if (value.expiresOn !== undefined) revision.expiresOn = value.expiresOn as string;
   if (note) revision.note = note;
+  if (value.back !== undefined) revision.back = readSide(value.back);
   return revision;
 }
 
@@ -348,7 +398,7 @@ export function parseDocumentIndex(value: unknown): DocumentIndex {
   const ids = new Set<string>();
   const keys = new Set<string>();
   for (const document of documents) {
-    for (const id of [document.id, ...document.revisions.flatMap((revision) => [revision.id, revision.attachmentId])]) {
+    for (const id of [document.id, ...document.revisions.flatMap((revision) => [revision.id, ...revisionAttachmentIds(revision)])]) {
       if (ids.has(id)) fail('The document index contains a duplicate id.');
       ids.add(id);
     }
@@ -356,8 +406,32 @@ export function parseDocumentIndex(value: unknown): DocumentIndex {
     keys.add(document.reminderKey);
   }
   const index: DocumentIndex = { version: 1, showReminderTitles: value.showReminderTitles, documents };
+  if (value.settingsUpdatedAt !== undefined) {
+    if (!isTimestamp(value.settingsUpdatedAt)) fail('The document index is damaged.');
+    index.settingsUpdatedAt = value.settingsUpdatedAt;
+  }
+  if (value.deletedDocuments !== undefined) {
+    const deleted = readDeletedDocuments(value.deletedDocuments);
+    if (Object.keys(deleted).length > 0) index.deletedDocuments = deleted;
+  }
   checkVaultLimits(index);
   return index;
+}
+
+/** Validates deletion records and keeps the newest {@link MAX_DELETED_DOCUMENTS}. */
+function readDeletedDocuments(value: unknown): Record<string, string> {
+  if (!isObject(value)) fail('The document index is damaged.');
+  const entries: [string, string][] = [];
+  for (const [id, deletedAt] of Object.entries(value)) {
+    if (!isDocumentId(id) || !isTimestamp(deletedAt)) fail('The document index is damaged.');
+    entries.push([id, deletedAt]);
+  }
+  return pruneDeletedDocuments(entries);
+}
+
+export function pruneDeletedDocuments(entries: Iterable<[string, string]>): Record<string, string> {
+  const sorted = [...entries].sort(([idA, a], [idB, b]) => Date.parse(b) - Date.parse(a) || idA.localeCompare(idB));
+  return Object.fromEntries(sorted.slice(0, MAX_DELETED_DOCUMENTS));
 }
 
 export function currentRevision(doc: VaultDocument): DocumentRevision {
@@ -369,7 +443,7 @@ export function currentRevision(doc: VaultDocument): DocumentRevision {
 /** Total plaintext bytes of every stored revision. */
 export function vaultUsageBytes(index: DocumentIndex): number {
   return index.documents.reduce(
-    (total, document) => total + document.revisions.reduce((sum, revision) => sum + revision.size, 0), 0,
+    (total, document) => total + document.revisions.reduce((sum, revision) => sum + revisionSize(revision), 0), 0,
   );
 }
 
@@ -383,7 +457,7 @@ export function checkVaultLimits(index: DocumentIndex): void {
       fail(`A document can keep up to ${DOCUMENT_LIMITS.maxRevisionsPerDocument} revisions. Delete an old revision of "${document.title}" first.`);
     }
     for (const revision of document.revisions) {
-      if (revision.size > DOCUMENT_LIMITS.maxFileBytes) {
+      if (revisionSides(revision).some(({ file }) => file.size > DOCUMENT_LIMITS.maxFileBytes)) {
         fail(`Files can be up to ${formatFileSize(DOCUMENT_LIMITS.maxFileBytes)}.`);
       }
     }
@@ -396,16 +470,25 @@ export function checkVaultLimits(index: DocumentIndex): void {
 
 /** Every attachment id the index refers to. */
 export function attachmentIds(index: DocumentIndex): Set<string> {
-  return new Set(index.documents.flatMap((document) => document.revisions.map((revision) => revision.attachmentId)));
+  return new Set(index.documents.flatMap((document) => document.revisions.flatMap(revisionAttachmentIds)));
+}
+
+function revisionAttachmentIds(revision: DocumentRevision): string[] {
+  return revisionSides(revision).map(({ file }) => file.attachmentId);
 }
 
 /* ------------------------------------------------------------------ */
 /* Index edits (pure; seal + commit the result)                         */
 /* ------------------------------------------------------------------ */
 
-export interface NewRevisionInput {
+export interface NewSideInput {
   attachmentId: string;
   file: { filename: string; mimeType: DocumentMime; size: number };
+}
+
+export interface NewRevisionInput extends NewSideInput {
+  /** Optional back side (ID cards). */
+  back?: NewSideInput;
   expiresOn?: string;
   note?: string;
 }
@@ -429,7 +512,12 @@ function buildRevision(input: NewRevisionInput, now: string): DocumentRevision {
   };
   if (input.expiresOn) revision.expiresOn = input.expiresOn;
   if (input.note && input.note.trim()) revision.note = input.note.trim();
+  if (input.back) revision.back = sideFrom(input.back);
   return readRevision(revision);
+}
+
+function sideFrom(input: NewSideInput): DocumentSide {
+  return { filename: input.file.filename, mimeType: input.file.mimeType, size: input.file.size, attachmentId: input.attachmentId };
 }
 
 function findDocument(index: DocumentIndex, documentId: string): VaultDocument {
@@ -524,6 +612,31 @@ export function updateRevisionDetails(
   return replaceDocument(index, { ...document, revisions, updatedAt: now });
 }
 
+/**
+ * Adds, replaces (`back` given) or removes (`null`) a revision's back side.
+ * Store the new attachment and delete the returned ones in the same commit.
+ */
+export function setRevisionBack(
+  index: DocumentIndex,
+  documentId: string,
+  revisionId: string,
+  back: NewSideInput | null,
+  now: string,
+): { index: DocumentIndex; removedAttachmentIds: string[] } {
+  const document = findDocument(index, documentId);
+  const revision = document.revisions.find((candidate) => candidate.id === revisionId);
+  if (!revision) fail('This revision no longer exists.');
+  if (!back && !revision.back) fail('This version has no back side.');
+  const next: DocumentRevision = { ...revision };
+  if (back) next.back = sideFrom(back);
+  else delete next.back;
+  const revisions = document.revisions.map((candidate) => (candidate.id === revisionId ? readRevision(next) : candidate));
+  return {
+    index: replaceDocument(index, { ...document, revisions, updatedAt: now }),
+    removedAttachmentIds: revision.back ? [revision.back.attachmentId] : [],
+  };
+}
+
 /** Deletes an old (non-current) revision. Delete its attachment in the same commit. */
 export function deleteDocumentRevision(
   index: DocumentIndex,
@@ -538,20 +651,28 @@ export function deleteDocumentRevision(
   const next = replaceDocument(index, {
     ...document, revisions: document.revisions.filter((candidate) => candidate.id !== revisionId), updatedAt: now,
   });
-  return { index: next, removedAttachmentIds: [revision.attachmentId] };
+  return { index: next, removedAttachmentIds: revisionAttachmentIds(revision) };
 }
 
-/** Deletes a document with every revision. Delete the returned attachments in the same commit. */
-export function removeDocument(index: DocumentIndex, documentId: string): { index: DocumentIndex; removedAttachmentIds: string[] } {
+/**
+ * Deletes a document with every revision and records the deletion (for sync).
+ * Delete the returned attachments in the same commit. `now` is an ISO timestamp.
+ */
+export function removeDocument(index: DocumentIndex, documentId: string, now: string): { index: DocumentIndex; removedAttachmentIds: string[] } {
   const document = findDocument(index, documentId);
+  if (!isTimestamp(now)) fail('The deletion time is not valid.');
   return {
-    index: parseDocumentIndex({ ...index, documents: index.documents.filter((candidate) => candidate.id !== documentId) }),
-    removedAttachmentIds: document.revisions.map((revision) => revision.attachmentId),
+    index: parseDocumentIndex({
+      ...index,
+      documents: index.documents.filter((candidate) => candidate.id !== documentId),
+      deletedDocuments: { ...index.deletedDocuments, [documentId]: now },
+    }),
+    removedAttachmentIds: document.revisions.flatMap(revisionAttachmentIds),
   };
 }
 
-export function setShowReminderTitles(index: DocumentIndex, show: boolean): DocumentIndex {
-  return parseDocumentIndex({ ...index, showReminderTitles: show });
+export function setShowReminderTitles(index: DocumentIndex, show: boolean, now: string): DocumentIndex {
+  return parseDocumentIndex({ ...index, showReminderTitles: show, settingsUpdatedAt: now });
 }
 
 /* ------------------------------------------------------------------ */
@@ -614,13 +735,22 @@ function newRevisionId(): string {
 /** Structural validation of an envelope (from storage or a backup). Rebuilds it. */
 export function readDocumentEnvelope(value: unknown): DocumentEnvelope {
   if (!isObject(value) || value.format !== 'dayflow-documents') fail('This is not a Dayflow document vault.');
-  if (value.version !== 1) fail('This document vault was made by a newer version of Dayflow. Update the app and try again.');
+  if (value.version !== 1 && value.version !== 2) fail('This document vault was made by a newer version of Dayflow. Update the app and try again.');
   if (typeof value.revision !== 'string' || !REVISION_PATTERN.test(value.revision)) fail('The document vault is damaged.');
-  let header: VaultFile;
-  try {
-    header = readVaultFile(JSON.stringify(value.header ?? null));
-  } catch {
-    fail('The document vault is damaged.');
+  let header: VaultFile | DocumentKeyHeader;
+  if (value.version === 2) {
+    const raw = value.header;
+    if (!isObject(raw) || !isStrictBase64(raw.id) || base64ToBytes(raw.id).length !== 16
+      || !isStrictBase64(raw.key) || base64ToBytes(raw.key).length !== 32) {
+      fail('The document vault is damaged.');
+    }
+    header = { id: raw.id, key: raw.key };
+  } else {
+    try {
+      header = readVaultFile(JSON.stringify(value.header ?? null));
+    } catch {
+      fail('The document vault is damaged.');
+    }
   }
   const index = value.index;
   if (!isObject(index) || !isStrictBase64(index.nonce) || !isStrictBase64(index.ciphertext)) {
@@ -632,13 +762,10 @@ export function readDocumentEnvelope(value: unknown): DocumentEnvelope {
   if (nonceLength !== 12 || cipherChars < 24 || cipherChars > Math.ceil((MAX_INDEX_BYTES + TAG_BYTES) / 3) * 4) {
     fail('The document vault is damaged.');
   }
-  return {
-    format: 'dayflow-documents',
-    version: 1,
-    revision: value.revision,
-    header,
-    index: { nonce: index.nonce, ciphertext: index.ciphertext },
-  };
+  const fields = { format: 'dayflow-documents' as const, revision: value.revision, index: { nonce: index.nonce, ciphertext: index.ciphertext } };
+  return value.version === 2
+    ? { ...fields, version: 2, header: header as DocumentKeyHeader }
+    : { ...fields, version: 1, header: header as VaultFile };
 }
 
 function isUint8Array(value: unknown): value is Uint8Array {
@@ -655,24 +782,78 @@ export function readStoredBlob(value: unknown): StoredBlob {
   return { nonce: value.nonce, ciphertext: value.ciphertext };
 }
 
-/** New, empty vault (not stored yet: commit it with `expectedRevision: null`). */
-export async function createDocumentVault(passphrase: string): Promise<DocumentSession> {
-  const { key, file } = await createVault(passphrase, []);
+/** New, empty vault with a fresh data key (not stored yet: commit it with `expectedRevision: null`). */
+export async function createDocumentVault(): Promise<DocumentSession> {
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const header: DocumentKeyHeader = { id: bytesToBase64(crypto.getRandomValues(new Uint8Array(16))), key: bytesToBase64(raw) };
+  const key = await importVaultKey(raw);
   const index: DocumentIndex = { version: 1, showReminderTitles: false, documents: [] };
   const draft: DocumentEnvelope = {
     format: 'dayflow-documents',
-    version: 1,
+    version: 2,
     revision: newRevisionId(),
-    header: file,
+    header,
     index: { nonce: '', ciphertext: '' },
   };
   const envelope = await sealDocumentIndex({ key, envelope: draft, index }, index);
   return { key, envelope, index };
 }
 
-/** Opens a vault. A wrong passphrase and altered data give the same message. */
+/** Opens a version 2 vault (no passphrase). */
+export async function openDocumentVault(envelope: DocumentEnvelope): Promise<DocumentSession> {
+  const checked = readDocumentEnvelope(envelope);
+  if (checked.version !== 2) fail('This document vault still uses a passphrase. Enter it once to update the vault.');
+  const key = await importVaultKey(base64ToBytes(checked.header.key));
+  let index: DocumentIndex;
+  try {
+    index = await decryptDocumentIndex(key, checked);
+  } catch (error) {
+    throw new Error(`The document vault is damaged and cannot be opened: ${(error as Error).message}`);
+  }
+  return { key, envelope: checked, index };
+}
+
+/**
+ * Turns a passphrase (version 1) envelope into a version 2 one with the same
+ * vault id and data key, so the index and every file stay valid. Used for an
+ * older vault on this device and for restoring a backup. Not stored yet.
+ */
+export async function upgradeDocumentVault(envelope: DocumentEnvelope, passphrase: string): Promise<DocumentSession> {
+  const checked = readDocumentEnvelope(envelope);
+  if (checked.version !== 1) return openDocumentVault(checked);
+  let raw: Uint8Array<ArrayBuffer>;
+  try {
+    raw = await vaultKeyBytes({
+      vaultId: checked.header.id, salt: checked.header.salt, wrappedKey: checked.header.wrappedKey, updatedAt: new Date(0).toISOString(),
+    }, passphrase);
+  } catch {
+    throw new Error(WRONG_PASSPHRASE_MESSAGE);
+  }
+  try {
+    const upgraded: DocumentEnvelope = {
+      format: 'dayflow-documents',
+      version: 2,
+      revision: newRevisionId(),
+      header: { id: checked.header.id, key: bytesToBase64(raw) },
+      index: checked.index,
+    };
+    const key = await importVaultKey(raw.slice());
+    let index: DocumentIndex;
+    try {
+      index = await decryptDocumentIndex(key, upgraded);
+    } catch {
+      throw new Error(WRONG_PASSPHRASE_MESSAGE);
+    }
+    return { key, envelope: upgraded, index };
+  } finally {
+    raw.fill(0);
+  }
+}
+
+/** Opens a version 1 vault with its passphrase. A wrong passphrase and altered data give the same message. */
 export async function unlockDocumentVault(envelope: DocumentEnvelope, passphrase: string): Promise<DocumentSession> {
   const checked = readDocumentEnvelope(envelope);
+  if (checked.version !== 1) return openDocumentVault(checked);
   let key: CryptoKey;
   let bytes: Uint8Array | undefined;
   let decoded: unknown;
@@ -699,6 +880,27 @@ export async function unlockDocumentVault(envelope: DocumentEnvelope, passphrase
 }
 
 /**
+ * Decrypts an envelope's index with an already unlocked data key (used by sync to
+ * read another device's copy of the same vault). Throws when the key does not fit.
+ */
+export async function decryptDocumentIndex(key: CryptoKey, envelope: DocumentEnvelope): Promise<DocumentIndex> {
+  const checked = readDocumentEnvelope(envelope);
+  let bytes: Uint8Array | undefined;
+  let decoded: unknown;
+  try {
+    bytes = await decryptVaultBytes(
+      key, { nonce: checked.index.nonce, ciphertext: base64ToBytes(checked.index.ciphertext) }, indexPurpose(checked.header.id),
+    );
+    decoded = JSON.parse(decoder.decode(bytes));
+  } catch {
+    throw new Error('The synced document vault could not be decrypted with this vault\'s key.');
+  } finally {
+    bytes?.fill(0);
+  }
+  return parseDocumentIndex(decoded);
+}
+
+/**
  * Validates the index (structure and limits) and encrypts it into a new envelope
  * with a fresh random revision. The session is not changed; after the commit
  * succeeds use `{ ...session, envelope, index: parseDocumentIndex(index) }`.
@@ -710,10 +912,8 @@ export async function sealDocumentIndex(session: DocumentSession, index: Documen
     if (bytes.length > MAX_INDEX_BYTES) fail('The document list is too large to save. Delete some documents or revisions.');
     const sealed = await encryptVaultBytes(session.key, bytes, indexPurpose(session.envelope.header.id));
     return {
-      format: 'dayflow-documents',
-      version: 1,
+      ...session.envelope,
       revision: newRevisionId(),
-      header: session.envelope.header,
       index: { nonce: sealed.nonce, ciphertext: bytesToBase64(sealed.ciphertext) },
     };
   } finally {
@@ -745,10 +945,40 @@ export async function decryptAttachment(session: DocumentSession, attachmentId: 
 
 export const DOCUMENT_BACKUP_FORMAT = 'dayflow-documents-backup';
 
-/** Ciphertext-only backup file (JSON). Blobs are written in id order. */
-export function buildDocumentBackup(envelope: DocumentEnvelope, blobs: Map<string, StoredBlob>, createdAt: string): string {
-  const checked = readDocumentEnvelope(envelope);
+/**
+ * Backup file (JSON). Its envelope is version 1: the vault's data key wrapped
+ * under `password`, so the file opens only with that password. Index and files
+ * are copied as they are (same key). Blobs are written in id order.
+ */
+export async function buildDocumentBackup(envelope: DocumentEnvelope, blobs: Map<string, StoredBlob>, createdAt: string, password: string): Promise<string> {
+  const current = readDocumentEnvelope(envelope);
   if (!isTimestamp(createdAt)) fail('The backup date is not valid.');
+  let checked: DocumentEnvelope;
+  if (current.version === 2) {
+    const raw = base64ToBytes(current.header.key);
+    try {
+      const wrapped = await wrapVaultFileKey(password, current.header.id, raw.slice());
+      const key = await importVaultKey(raw.slice());
+      checked = {
+        format: 'dayflow-documents',
+        version: 1,
+        revision: current.revision,
+        header: {
+          format: 'dayflow-password-vault',
+          version: 1,
+          id: current.header.id,
+          salt: wrapped.salt,
+          wrappedKey: wrapped.wrappedKey,
+          entries: await sealEntries(current.header.id, key, []),
+        },
+        index: current.index,
+      };
+    } finally {
+      raw.fill(0);
+    }
+  } else {
+    checked = current;
+  }
   if (blobs.size > MAX_ATTACHMENTS) fail('The vault has more files than a backup can hold.');
   const entries = [...blobs.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, blob]) => {
     if (!isDocumentId(id)) fail('A stored file has an invalid id.');
@@ -786,6 +1016,7 @@ export function parseDocumentBackup(text: string): { envelope: DocumentEnvelope;
   } catch {
     fail('This backup is damaged (the vault header is invalid).');
   }
+  if (envelope.version !== 1) fail('This backup is damaged (it is not password-protected).');
   if (!Array.isArray(value.blobs)) fail('This backup is damaged (the file list is missing).');
   if (value.blobs.length > MAX_ATTACHMENTS) fail('This backup has more files than a vault can hold.');
   const blobs = new Map<string, StoredBlob>();
@@ -814,19 +1045,22 @@ export function parseDocumentBackup(text: string): { envelope: DocumentEnvelope;
 }
 
 /**
- * Opens the backup with its passphrase and checks EVERYTHING before a restore
+ * Opens the backup with its password and checks EVERYTHING before a restore
  * writes anything: the index decrypts and validates, every referenced file is
  * present (and nothing else), and every file decrypts under its own id with the
- * recorded size and type.
+ * recorded size and type. Returns the vault as a version 2 session (no
+ * passphrase) to store with the backup's blobs.
  */
 export async function verifyDocumentBackup(
   parsed: { envelope: DocumentEnvelope; blobs: Map<string, StoredBlob> },
   passphrase: string,
 ): Promise<DocumentSession> {
-  const session = await unlockDocumentVault(parsed.envelope, passphrase);
-  const revisions = new Map<string, DocumentRevision>();
+  const session = await upgradeDocumentVault(parsed.envelope, passphrase);
+  const revisions = new Map<string, DocumentSide>();
   for (const document of session.index.documents) {
-    for (const revision of document.revisions) revisions.set(revision.attachmentId, revision);
+    for (const revision of document.revisions) {
+      for (const { file } of revisionSides(revision)) revisions.set(file.attachmentId, file);
+    }
   }
   const missing = [...revisions.keys()].filter((id) => !parsed.blobs.has(id)).length;
   if (missing > 0) fail(`This backup is incomplete: ${missing} file${missing === 1 ? ' is' : 's are'} missing. Nothing was restored.`);

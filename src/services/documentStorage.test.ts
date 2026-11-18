@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentEnvelope, StoredBlob } from '../lib/documentVault';
 import { bytesToBase64 } from '../lib/passwordVault';
 import {
+  applySyncedDocumentVault,
   commitDocumentVault,
+  deleteLocalDocumentVault,
+  readBlobIds,
+  readDocumentSyncState,
+  writeDocumentSyncState,
   readAllBlobs,
   readBlob,
   readBlobs,
@@ -102,9 +107,9 @@ describe('document storage', () => {
     await expect(commitDocumentVault({
       envelope: envelope('revision-0003'), expectedRevision: 'revision-9999',
       putBlobs: new Map([['blob-x', blob(9)]]), deleteBlobIds: ['blob-a'],
-    })).rejects.toThrow('changed in another window');
+    })).rejects.toThrow('changed meanwhile');
     // Creating over an existing vault is a conflict too.
-    await expect(commitDocumentVault({ envelope: envelope('revision-0004'), expectedRevision: null })).rejects.toThrow('changed in another window');
+    await expect(commitDocumentVault({ envelope: envelope('revision-0004'), expectedRevision: null })).rejects.toThrow('changed meanwhile');
     expect(await readDocumentVault()).toEqual(first);
     expect([...(await readAllBlobs()).keys()].sort()).toEqual(['blob-a', 'blob-b']);
   });
@@ -193,5 +198,53 @@ describe('document storage', () => {
     expect(await readDocumentVault()).toBeUndefined();
     await seed();
     expect((await readDocumentVault())?.revision).toBe('revision-0001');
+  });
+
+  describe('sync', () => {
+    const owner = '11111111-2222-4333-8444-555555555555';
+
+    it('applies a synced vault atomically: new files in, unused files out, sync state saved', async () => {
+      const first = await seed();
+      const next = envelope('revision-0020');
+      await applySyncedDocumentVault({
+        envelope: next, expectedRevision: first.revision,
+        putBlobs: new Map([['blob-c', blob(3)]]), keepIds: new Set(['blob-b', 'blob-c']),
+        meta: { ownerId: owner, syncedRevision: 'revision-0020' },
+      });
+      expect((await readDocumentVault())?.revision).toBe('revision-0020');
+      expect([...(await readBlobIds())].sort()).toEqual(['blob-b', 'blob-c']);
+      expect(await readDocumentSyncState()).toEqual({ ownerId: owner, syncedRevision: 'revision-0020' });
+    });
+
+    it('adopts into an empty device and refuses when a file is missing or the vault changed', async () => {
+      await applySyncedDocumentVault({
+        envelope: envelope('revision-0021'), expectedRevision: null,
+        putBlobs: new Map([['blob-a', blob(1)]]), keepIds: new Set(['blob-a']),
+        meta: { ownerId: owner, syncedRevision: 'revision-0021' },
+      });
+      await expect(applySyncedDocumentVault({
+        envelope: envelope('revision-0022'), expectedRevision: 'revision-0021',
+        putBlobs: new Map(), keepIds: new Set(['blob-a', 'blob-missing']),
+        meta: { ownerId: owner, syncedRevision: 'revision-0022' },
+      })).rejects.toThrow('missing');
+      await expect(applySyncedDocumentVault({
+        envelope: envelope('revision-0023'), expectedRevision: 'revision-9999',
+        putBlobs: new Map(), keepIds: new Set(['blob-a']),
+        meta: { ownerId: owner, syncedRevision: 'revision-0023' },
+      })).rejects.toThrow('changed meanwhile');
+      expect((await readDocumentVault())?.revision).toBe('revision-0021');
+    });
+
+    it('saves sync state only for the current revision, and deletes the local vault', async () => {
+      const first = await seed();
+      await expect(writeDocumentSyncState({ ownerId: owner, syncedRevision: 'revision-0001' }, 'revision-9999')).rejects.toThrow('changed meanwhile');
+      await writeDocumentSyncState({ ownerId: owner, syncedRevision: 'revision-0001' }, first.revision);
+      expect((await readDocumentSyncState())?.ownerId).toBe(owner);
+      await expect(deleteLocalDocumentVault('revision-9999')).rejects.toThrow('changed meanwhile');
+      await deleteLocalDocumentVault(first.revision);
+      expect(await readDocumentVault()).toBeUndefined();
+      expect(await readDocumentSyncState()).toBeUndefined();
+      expect((await readBlobIds()).size).toBe(0);
+    });
   });
 });

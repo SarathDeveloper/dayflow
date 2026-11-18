@@ -1,10 +1,12 @@
 /**
- * IndexedDB storage for the Document Vault (device-only: never synced, not in
- * the app backup).
+ * IndexedDB storage for the Document Vault (not in the app backup; encrypted
+ * copies sync to the account through services/documentSync.ts).
  *
  * Database `dayflow-documents` v2:
- *   - `vault`: key 'current' -> DocumentEnvelope (header + encrypted index)
- *   - `blobs`: key attachmentId -> StoredBlob (encrypted file bytes)
+ *   - `vault`: key 'current' -> DocumentEnvelope (header + encrypted index),
+ *     key 'sync' -> DocumentSyncMeta (which account, last matched server revision)
+ *   - `blobs`: key attachmentId -> StoredBlob (encrypted file bytes). Holds
+ *     exactly the files the current envelope refers to: every write keeps it so.
  *
  * Every change writes the new envelope, the new blobs and the deletes of
  * orphaned blobs in ONE readwrite transaction over both stores, after checking
@@ -19,14 +21,16 @@ import {
   type DocumentEnvelope,
   type StoredBlob,
 } from '../lib/documentVault';
+import { readDocumentSyncMeta, type DocumentSyncMeta } from '../lib/documentSync';
 
 const DB_NAME = 'dayflow-documents';
 const DB_VERSION = 2;
 const VAULT_STORE = 'vault';
 const BLOB_STORE = 'blobs';
 const CURRENT_KEY = 'current';
+const SYNC_KEY = 'sync';
 
-const CONFLICT_MESSAGE = 'The document vault was changed in another window. Nothing was saved. Lock the vault, unlock it again and retry.';
+export const CONFLICT_MESSAGE = 'The document vault changed meanwhile (in another window or by a sync). Nothing was saved. Try again.';
 const QUOTA_MESSAGE = 'There is not enough storage space on this device to save the documents. Nothing was saved. Free up space and try again.';
 const SAVE_FAILED_MESSAGE = 'The documents could not be saved. Nothing was changed: your previous vault is intact.';
 const READ_FAILED_MESSAGE = 'The document vault could not be read from this device\'s storage.';
@@ -292,6 +296,108 @@ export async function replaceDocumentVault(envelope: DocumentEnvelope, blobs: Ma
         abortWith(new Error(isQuotaError(error) ? QUOTA_MESSAGE : SAVE_FAILED_MESSAGE));
       }
     };
+  }));
+}
+
+/** Which account this device's vault syncs with, and the server revision it last matched. */
+export async function readDocumentSyncState(): Promise<DocumentSyncMeta | undefined> {
+  const raw = await withDatabase(readOnly<unknown>([VAULT_STORE], (tx, done) => {
+    const request = tx.objectStore(VAULT_STORE).get(SYNC_KEY);
+    request.onsuccess = () => done(request.result);
+  }));
+  return readDocumentSyncMeta(raw);
+}
+
+/** Ids and packed sizes (nonce + ciphertext) of every stored file, for a push. */
+export async function readBlobManifest(): Promise<Map<string, number>> {
+  const blobs = await readAllBlobs();
+  return new Map([...blobs].map(([id, blob]) => [id, 12 + blob.ciphertext.length]));
+}
+
+/** Stored attachment ids only (no file data). */
+export async function readBlobIds(): Promise<Set<string>> {
+  const keys = await withDatabase(readOnly<IDBValidKey[]>([BLOB_STORE], (tx, done) => {
+    const request = tx.objectStore(BLOB_STORE).getAllKeys();
+    request.onsuccess = () => done(request.result);
+  }));
+  return new Set(keys.map(String));
+}
+
+function storedRevisionMatches(vault: IDBObjectStore, expected: string | null, onMatch: () => void, abortWith: (error: Error) => void) {
+  const request = vault.get(CURRENT_KEY);
+  request.onsuccess = () => {
+    const stored = request.result as { revision?: unknown } | undefined;
+    const storedRevision = stored === undefined ? null : stored?.revision;
+    if (storedRevision !== expected) {
+      abortWith(new Error(CONFLICT_MESSAGE));
+      return;
+    }
+    onMatch();
+  };
+}
+
+/** Saves the sync state, but only while the stored envelope is still `expectedRevision`. */
+export async function writeDocumentSyncState(meta: DocumentSyncMeta, expectedRevision: string): Promise<void> {
+  const checked = readDocumentSyncMeta(meta);
+  if (!checked) throw new Error('The sync state to save is not valid.');
+  await withDatabase((db) => writeTransaction(db, (tx, abortWith) => {
+    const vault = tx.objectStore(VAULT_STORE);
+    storedRevisionMatches(vault, expectedRevision, () => vault.put(checked, SYNC_KEY), abortWith);
+  }));
+}
+
+/**
+ * Applies a vault from sync in ONE transaction: checks the stored envelope is
+ * still `expectedRevision` (null: no vault yet), stores `putBlobs`, deletes every
+ * stored file not in `keepIds`, then stores the envelope and the sync state.
+ * `putBlobs` and the files already stored must together cover `keepIds`.
+ */
+export async function applySyncedDocumentVault(change: {
+  envelope: DocumentEnvelope;
+  expectedRevision: string | null;
+  putBlobs: Map<string, StoredBlob>;
+  keepIds: Set<string>;
+  meta: DocumentSyncMeta;
+}): Promise<void> {
+  const envelope = validateEnvelope(change.envelope);
+  const putBlobs = validateBlobs(change.putBlobs);
+  const meta = readDocumentSyncMeta(change.meta);
+  if (!meta) throw new Error('The sync state to save is not valid.');
+  if ([...putBlobs.keys()].some((id) => !change.keepIds.has(id))) throw new Error('A synced file is not part of the vault. Nothing was saved.');
+
+  await withDatabase((db) => writeTransaction(db, (tx, abortWith) => {
+    const vault = tx.objectStore(VAULT_STORE);
+    const blobs = tx.objectStore(BLOB_STORE);
+    storedRevisionMatches(vault, change.expectedRevision, () => {
+      const keys = blobs.getAllKeys();
+      keys.onsuccess = () => {
+        const present = new Set(keys.result.map(String));
+        const missing = [...change.keepIds].filter((id) => !present.has(id) && !putBlobs.has(id));
+        if (missing.length > 0) {
+          abortWith(new Error('Some synced files are missing. Nothing was saved; the next sync tries again.'));
+          return;
+        }
+        try {
+          for (const [id, blob] of putBlobs) blobs.put(blob, id);
+          for (const id of present) if (!change.keepIds.has(id)) blobs.delete(id);
+          vault.put(envelope, CURRENT_KEY);
+          vault.put(meta, SYNC_KEY);
+        } catch (error) {
+          abortWith(new Error(isQuotaError(error) ? QUOTA_MESSAGE : SAVE_FAILED_MESSAGE));
+        }
+      };
+    }, abortWith);
+  }));
+}
+
+/** Removes this device's vault (envelope, files and sync state) if it is still `expectedRevision`. */
+export async function deleteLocalDocumentVault(expectedRevision: string): Promise<void> {
+  await withDatabase((db) => writeTransaction(db, (tx, abortWith) => {
+    const vault = tx.objectStore(VAULT_STORE);
+    storedRevisionMatches(vault, expectedRevision, () => {
+      vault.clear();
+      tx.objectStore(BLOB_STORE).clear();
+    }, abortWith);
   }));
 }
 

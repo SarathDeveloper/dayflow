@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ExternalLink, Eye, EyeOff, History, Pencil, Star, Trash2, UserRound } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Eye, EyeOff, History, Pencil, Star, Trash2 } from 'lucide-react';
 import type { VaultEntry } from '../../lib/passwordVault';
 import { formatShortDate } from '../../lib/dateFormat';
 import { Button } from '../ui/Button';
@@ -97,7 +97,7 @@ export function VaultDetails({ entry, busy, reused, onBack, onEdit, onToggleFavo
 
         <div className="mt-3">
           {(kind === 'login' || kind === 'wifi') && entry.username && (
-            <Row label={kind === 'wifi' ? 'Network name' : 'Username'} actions={<CopyButton icon={UserRound} label="Copy username" onCopy={() => onCopy(entry.username)} />}>
+            <Row label={kind === 'wifi' ? 'Network name' : 'Username'} actions={<CopyButton label={kind === 'wifi' ? 'Copy network name' : 'Copy username'} onCopy={() => onCopy(entry.username)} />}>
               {entry.username}
             </Row>
           )}
@@ -111,24 +111,25 @@ export function VaultDetails({ entry, busy, reused, onBack, onEdit, onToggleFavo
             <Row label="2FA code"><TotpCode secret={entry.totp} onCopy={onCopy} /></Row>
           )}
           {kind === 'login' && entry.website && (
-            <Row label="Website" actions={url ? (
-              <a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open website"
+            <Row label="Website" actions={<>
+              <CopyButton label="Copy website" onCopy={() => onCopy(entry.website)} />
+              {url && <a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open website"
                 className="flex size-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">
                 <ExternalLink className="size-4" />
-              </a>
-            ) : undefined}>
+              </a>}
+            </>}>
               {entry.website}
             </Row>
           )}
           {kind === 'card' && entry.card && <>
-            {entry.card.holder && <Row label="Name on card">{entry.card.holder}</Row>}
+            {entry.card.holder && <Row label="Name on card" actions={<CopyButton label="Copy name on card" onCopy={() => onCopy(entry.card!.holder)} />}>{entry.card.holder}</Row>}
             {entry.card.number && secret('number', entry.card.number, 'Card number')}
             {entry.card.expiry && <Row label="Expiry" actions={<CopyButton label="Copy expiry" onCopy={() => onCopy(entry.card!.expiry)} />}>{entry.card.expiry}</Row>}
             {entry.card.cvv && secret('cvv', entry.card.cvv, 'CVV')}
             {entry.password && secret('pin', entry.password, 'PIN')}
           </>}
           {entry.notes && (
-            <Row label={kind === 'note' ? 'Note' : 'Notes'} actions={kind === 'note' ? <CopyButton label="Copy note" onCopy={() => onCopy(entry.notes)} /> : undefined}>
+            <Row label={kind === 'note' ? 'Note' : 'Notes'} actions={<CopyButton label={kind === 'note' ? 'Copy note' : 'Copy notes'} onCopy={() => onCopy(entry.notes)} />}>
               <span className="whitespace-pre-wrap break-words">{entry.notes}</span>
             </Row>
           )}

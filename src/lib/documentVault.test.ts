@@ -8,6 +8,7 @@ import {
   createDocumentVault,
   currentRevision,
   decryptAttachment,
+  decryptDocumentIndex,
   deleteDocumentRevision,
   DOCUMENT_LIMITS,
   documentReminderDates,
@@ -18,10 +19,14 @@ import {
   parseDocumentIndex,
   readDocumentEnvelope,
   removeDocument,
+  revisionSides,
   sealDocumentIndex,
+  setRevisionBack,
   setShowReminderTitles,
   sniffDocumentType,
+  openDocumentVault,
   unlockDocumentVault,
+  upgradeDocumentVault,
   updateDocumentDetails,
   validateDocumentFile,
   vaultUsageBytes,
@@ -178,7 +183,7 @@ describe('document index', () => {
     expect(vaultUsageBytes(renewed)).toBe(300);
 
     // Titles appear only when the user opted in.
-    expect(documentReminderEntries(setShowReminderTitles(renewed, true))[0].label).toBe('Driving licence');
+    expect(documentReminderEntries(setShowReminderTitles(renewed, true, LATER))[0].label).toBe('Driving licence');
     expect(documentReminderEntries(renewed)[0]).not.toHaveProperty('label');
 
     const edited = updateDocumentDetails(renewed, document.id, { reminderDays: [0, 90], assetId: 'car-1', serviceRecordId: 'svc-1' }, LATER);
@@ -193,9 +198,71 @@ describe('document index', () => {
     expect(pruned.removedAttachmentIds).toEqual([document.revisions[0].attachmentId]);
     expect(pruned.index.documents[0].revisions).toHaveLength(1);
 
-    const removed = removeDocument(renewed, document.id);
+    const removed = removeDocument(renewed, document.id, LATER);
     expect(removed.index.documents).toEqual([]);
+    expect(removed.index.deletedDocuments).toEqual({ [document.id]: LATER });
     expect(new Set(removed.removedAttachmentIds)).toEqual(attachmentIds(renewed));
+  });
+});
+
+describe('front and back sides', () => {
+  const file = { filename: 'aadhaar-front.jpg', mimeType: 'image/jpeg' as const, size: 100 };
+  const backFile = { filename: 'aadhaar-back.jpg', mimeType: 'image/jpeg' as const, size: 40 };
+
+  it('stores a back side with the version and counts both files', () => {
+    const front = newDocumentId();
+    const back = newDocumentId();
+    const { index, document } = addDocument(emptyIndex(), {
+      title: 'Aadhaar', category: 'Identity', attachmentId: front, file, back: { attachmentId: back, file: backFile },
+    }, NOW);
+    const revision = currentRevision(document);
+    expect(revision.back).toEqual({ ...backFile, attachmentId: back });
+    expect(revisionSides(revision).map((entry) => entry.side)).toEqual(['front', 'back']);
+    expect(attachmentIds(index)).toEqual(new Set([front, back]));
+    expect(vaultUsageBytes(index)).toBe(140);
+    expect(parseDocumentIndex(JSON.parse(JSON.stringify(index)))).toEqual(index);
+
+    const removed = removeDocument(index, document.id, LATER);
+    expect(new Set(removed.removedAttachmentIds)).toEqual(new Set([front, back]));
+  });
+
+  it('adds, replaces and removes the back of an existing version', () => {
+    const { index, document } = addDocument(emptyIndex(), { title: 'PAN', category: 'Identity', attachmentId: newDocumentId(), file }, NOW);
+    const revisionId = document.currentRevisionId;
+    expect(() => setRevisionBack(index, document.id, revisionId, null, LATER)).toThrow('no back side');
+
+    const firstBack = newDocumentId();
+    const added = setRevisionBack(index, document.id, revisionId, { attachmentId: firstBack, file: backFile }, LATER);
+    expect(added.removedAttachmentIds).toEqual([]);
+    expect(currentRevision(added.index.documents[0]).back?.attachmentId).toBe(firstBack);
+    expect(added.index.documents[0].updatedAt).toBe(LATER);
+
+    const secondBack = newDocumentId();
+    const replaced = setRevisionBack(added.index, document.id, revisionId, { attachmentId: secondBack, file: backFile }, LATER);
+    expect(replaced.removedAttachmentIds).toEqual([firstBack]);
+    expect(attachmentIds(replaced.index).has(firstBack)).toBe(false);
+
+    const cleared = setRevisionBack(replaced.index, document.id, revisionId, null, LATER);
+    expect(cleared.removedAttachmentIds).toEqual([secondBack]);
+    expect(currentRevision(cleared.index.documents[0])).not.toHaveProperty('back');
+  });
+
+  it('rejects a back side that reuses an id or is invalid', () => {
+    const document = fakeDocument([10]);
+    const revision = document.revisions[0];
+    const reuse = { ...document, revisions: [{ ...revision, back: { ...backFile, attachmentId: revision.attachmentId } }] };
+    expect(() => parseDocumentIndex({ ...emptyIndex(), documents: [reuse] })).toThrow('duplicate id');
+    const badType = { ...document, revisions: [{ ...revision, back: { ...backFile, mimeType: 'text/plain', attachmentId: newDocumentId() } }] };
+    expect(() => parseDocumentIndex({ ...emptyIndex(), documents: [badType] })).toThrow('unsupported file type');
+  });
+
+  it('deletes both sides with an old version', () => {
+    const { index, document } = addDocument(emptyIndex(), { title: 'Licence', category: 'Identity', attachmentId: newDocumentId(), file }, NOW);
+    const back = newDocumentId();
+    const withBack = setRevisionBack(index, document.id, document.currentRevisionId, { attachmentId: back, file: backFile }, NOW).index;
+    const renewed = addDocumentRevision(withBack, document.id, { attachmentId: newDocumentId(), file }, LATER);
+    const pruned = deleteDocumentRevision(renewed, document.id, document.currentRevisionId, LATER);
+    expect(pruned.removedAttachmentIds).toEqual([currentRevision(document).attachmentId, back]);
   });
 });
 
@@ -205,7 +272,7 @@ describe('encryption', () => {
   let attachmentId: string;
 
   beforeAll(async () => {
-    const created = await createDocumentVault(passphrase);
+    const created = await createDocumentVault();
     attachmentId = newDocumentId();
     const { index } = addDocument(created.index, {
       title: 'Passport secret title', category: 'Travel', attachmentId,
@@ -216,36 +283,47 @@ describe('encryption', () => {
     session = { ...created, envelope, index };
   }, KDF_TIMEOUT);
 
-  it('rejects short passphrases', async () => {
-    await expect(createDocumentVault('too short')).rejects.toThrow('at least 15 characters');
-  });
-
-  it('round-trips the index and attachments without leaking plaintext', async () => {
+  it('creates a vault that opens without a passphrase and keeps contents encrypted', async () => {
+    expect(session.envelope.version).toBe(2);
     const stored = JSON.stringify(session.envelope);
     for (const secret of ['Passport secret title', 'passport-scan.pdf', 'Travel', '2030-05-01']) {
       expect(stored).not.toContain(secret);
     }
-    const reopened = await unlockDocumentVault(readDocumentEnvelope(JSON.parse(stored)), passphrase);
+    const reopened = await openDocumentVault(readDocumentEnvelope(JSON.parse(stored)));
     expect(reopened.index).toEqual(session.index);
     expect(await decryptAttachment(reopened, attachmentId, blob)).toEqual(PDF);
     expect(new TextDecoder().decode(blob.ciphertext)).not.toContain('%PDF');
-  }, KDF_TIMEOUT);
+  });
 
-  it('gives one generic error for a wrong passphrase or tampered index', async () => {
-    await expect(unlockDocumentVault(session.envelope, 'a wrong passphrase entirely')).rejects.toThrow(WRONG_PASSPHRASE_MESSAGE);
+  it('refuses a tampered index', async () => {
     const tamperedCipher = { ...session.envelope, index: { ...session.envelope.index, ciphertext: flipFirstChar(session.envelope.index.ciphertext) } };
-    await expect(unlockDocumentVault(tamperedCipher, passphrase)).rejects.toThrow(WRONG_PASSPHRASE_MESSAGE);
+    await expect(openDocumentVault(tamperedCipher)).rejects.toThrow('damaged');
     const tamperedNonce = { ...session.envelope, index: { ...session.envelope.index, nonce: flipFirstChar(session.envelope.index.nonce) } };
-    await expect(unlockDocumentVault(tamperedNonce, passphrase)).rejects.toThrow(WRONG_PASSPHRASE_MESSAGE);
-  }, KDF_TIMEOUT);
+    await expect(openDocumentVault(tamperedNonce)).rejects.toThrow('damaged');
+  });
 
   it('binds the index to its vault id', async () => {
     // Same data key, different vault id in the AAD: the index must not decrypt.
     const otherId = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
-    const forgedSession = { ...session, envelope: { ...session.envelope, header: { ...session.envelope.header, id: otherId } } };
+    const forgedSession = { ...session, envelope: { ...session.envelope, header: { ...session.envelope.header, id: otherId } } } as DocumentSession;
     const forged = await sealDocumentIndex(forgedSession, session.index);
-    await expect(unlockDocumentVault({ ...session.envelope, index: forged.index }, passphrase)).rejects.toThrow(WRONG_PASSPHRASE_MESSAGE);
-  }, KDF_TIMEOUT);
+    await expect(openDocumentVault({ ...session.envelope, index: forged.index })).rejects.toThrow('damaged');
+  });
+
+  it('converts a passphrase vault once, keeping its id, key and files', async () => {
+    // A passphrase envelope, as older devices store it, is what a backup carries.
+    const legacy = parseDocumentBackup(await buildDocumentBackup(session.envelope, new Map([[attachmentId, blob]]), LATER, passphrase)).envelope;
+    expect(legacy.version).toBe(1);
+    await expect(openDocumentVault(legacy)).rejects.toThrow('passphrase');
+    await expect(upgradeDocumentVault(legacy, 'a wrong passphrase entirely')).rejects.toThrow(WRONG_PASSPHRASE_MESSAGE);
+    const upgraded = await upgradeDocumentVault(legacy, passphrase);
+    expect(upgraded.envelope.version).toBe(2);
+    expect(upgraded.envelope.header.id).toBe(session.envelope.header.id);
+    expect(upgraded.envelope.revision).not.toBe(legacy.revision);
+    expect(upgraded.index).toEqual(session.index);
+    expect(await decryptAttachment(upgraded, attachmentId, blob)).toEqual(PDF);
+    expect((await unlockDocumentVault(legacy, passphrase)).index).toEqual(session.index);
+  }, KDF_TIMEOUT * 2);
 
   it('binds each attachment to its id and rejects altered blobs', async () => {
     const otherId = newDocumentId();
@@ -269,9 +347,9 @@ describe('encryption', () => {
   describe('backups', () => {
     let backup: string;
 
-    beforeAll(() => {
-      backup = buildDocumentBackup(session.envelope, new Map([[attachmentId, blob]]), LATER);
-    });
+    beforeAll(async () => {
+      backup = await buildDocumentBackup(session.envelope, new Map([[attachmentId, blob]]), LATER, passphrase);
+    }, KDF_TIMEOUT);
 
     function mutate(change: (value: Record<string, unknown>) => void): string {
       const value = JSON.parse(backup);
@@ -279,9 +357,11 @@ describe('encryption', () => {
       return JSON.stringify(value);
     }
 
-    it('round-trips a ciphertext-only backup', async () => {
+    it('round-trips a password-protected backup', async () => {
       expect(backup).not.toContain('Passport secret title');
       expect(backup).not.toContain(passphrase);
+      // The vault's own key is wrapped by the backup password, never stored as is.
+      if (session.envelope.version === 2) expect(backup).not.toContain(session.envelope.header.key);
       const parsed = parseDocumentBackup(backup);
       const verified = await verifyDocumentBackup(parsed, passphrase);
       expect(verified.index).toEqual(session.index);
@@ -317,14 +397,14 @@ describe('encryption', () => {
       large[large.length - 1] = 7;
       const largeId = newDocumentId();
       const sealed = await encryptAttachment(session, largeId, large);
-      const text = buildDocumentBackup(session.envelope, new Map([[attachmentId, blob], [largeId, sealed]]), LATER);
+      const text = await buildDocumentBackup(session.envelope, new Map([[attachmentId, blob], [largeId, sealed]]), LATER, passphrase);
       const parsed = parseDocumentBackup(text);
       expect([...parsed.blobs.keys()].sort()).toEqual([attachmentId, largeId].sort());
       const decrypted = await decryptAttachment(session, largeId, parsed.blobs.get(largeId)!);
       // Byte loop: deep equality on 10 MB arrays is very slow in the test runner.
       expect(decrypted.length).toBe(large.length);
       expect(decrypted.every((byte, index) => byte === large[index])).toBe(true);
-    });
+    }, KDF_TIMEOUT);
 
     it('rejects oversized backups and files', () => {
       expect(() => parseDocumentBackup(' '.repeat(DOCUMENT_LIMITS.maxBackupBytes + 1))).toThrow('larger than 96 MB');
@@ -356,4 +436,18 @@ describe('encryption', () => {
       await expect(verifyDocumentBackup(swapped, passphrase)).rejects.toThrow('damaged or has been altered');
     }, KDF_TIMEOUT * 2);
   });
+});
+
+describe('sync decryption', () => {
+  it('opens another copy of the same vault with its key, and only that vault', async () => {
+    const vault = await createDocumentVault();
+    const added = addDocument(vault.index, {
+      title: 'Passport', category: 'Identity', attachmentId: newDocumentId(),
+      file: { filename: 'passport.pdf', mimeType: 'application/pdf', size: 10 },
+    }, NOW).index;
+    const sealed = await sealDocumentIndex(vault, added);
+    expect((await decryptDocumentIndex(vault.key, sealed)).documents[0].title).toBe('Passport');
+    const other = await createDocumentVault();
+    await expect(decryptDocumentIndex(other.key, sealed)).rejects.toThrow('could not be decrypted');
+  }, KDF_TIMEOUT);
 });

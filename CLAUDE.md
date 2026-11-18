@@ -67,10 +67,11 @@ features, setup and the Android release process.
   (`dayflow_daily_plan_v1`), app-lock flag (`dayflow_app_lock`) and the website
   lock's WebAuthn credential id (`dayflow_web_lock_credential_v1`), alarm song
   files (Android `filesDir/songs/`, website IndexedDB `dayflow-media`), bank SMS
-  queue (`dayflow_bank_sms_*`), the document vault (IndexedDB `dayflow-documents`,
-  its own passphrase and encrypted backup) and its plaintext reminder schedule
+  queue (`dayflow_bank_sms_*`), the document vault's plaintext reminder schedule
   (`dayflow_document_reminders_v1`: dates + random keys only, titles only if the
-  user opts in). A reminder's `songId` does sync, so it may name
+  user opts in; each device rebuilds it on open and after a sync) and
+  decrypted copies the viewer, Share or Print hand out (Android `cache/shared/`,
+  deleted after 15 minutes). A reminder's `songId` does sync, so it may name
   a song this device lacks: `pickSong` then falls back to the oldest song, then
   the chime. A new collection that should sync must be added to
   `SyncData` in `lib/persistence.ts`, `RECORD_COLLECTIONS` in
@@ -88,6 +89,23 @@ features, setup and the Android release process.
   the device copy once synced. Backup files are v1 files locked with a password
   chosen at export. Local copy: Android plugin file, website localStorage
   `dayflow_password_vault_v2`.
+- **The document vault has no passphrase (account key) and syncs itself.**
+  Envelope version 2 keeps the data key in its header, so it opens without an
+  unlock step and is not end-to-end. Version 1 (passphrase-wrapped key: older
+  devices and every backup file, locked with a password chosen at export)
+  converts with `upgradeDocumentVault`, keeping id and key so files stay valid.
+  `services/documentSync.ts` copies the envelope (header + encrypted index) to
+  `dayflow_document_vaults` (one row per user, written compare-and-swap on
+  `revision`), each encrypted file to the private Storage bucket `document-vault`
+  as `<user id>/<attachment id>.<part>` in parts of at most 3 MB (the `/supabase`
+  proxy). A merge (both sides changed) uses the header's key; after any pulled
+  change sync rebuilds the reminder schedule. A version 1 vault does not sync
+  until converted. The local blob store must hold exactly the
+  files the stored envelope refers to (every write in `services/documentStorage.ts`
+  keeps that, and push builds its file list from it). Deleting a document
+  records it in `deletedDocuments` (`removeDocument(index, id, now)`) so a merge
+  cannot bring it back. Rules in `lib/documentSync.ts` (tested). It has its own
+  backup and is not in the app backup.
 - **Vault "ask for fingerprint" is device-only:** Android Keystore key + file
   `password-vault-bio.v1`, website passkey (WebAuthn PRF) in
   `dayflow_vault_passkey_v1`, prefs (auto-lock, last backup) in
