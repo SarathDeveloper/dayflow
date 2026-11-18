@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Plus, Repeat, TrendingUp, Wallet } from 'lucide-react';
+import { Calendar, Home, Plus, Repeat, Wallet } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface BottomNavProps {
@@ -15,10 +15,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 }) => {
   // Everything else lives in the sidebar drawer (header menu button / edge swipe).
   const tabs = [
+    { id: 'home', label: 'Home', icon: Home },
     { id: 'today', label: 'Today', icon: Calendar },
     { id: 'habits', label: 'Habits', icon: Repeat },
     { id: 'finance', label: 'Money', icon: Wallet },
-    { id: 'stats', label: 'Streak', icon: TrendingUp },
   ];
 
   return (

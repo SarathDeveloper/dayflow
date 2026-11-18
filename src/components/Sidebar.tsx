@@ -29,25 +29,48 @@ interface NavItem {
   icon: React.ElementType;
 }
 
-function navItems(): NavItem[] {
+interface NavSection {
+  /** Small heading above the items; none for the top (Home) section. */
+  title?: string;
+  items: NavItem[];
+}
+
+function navSections(): NavSection[] {
   return [
-    { id: 'home', label: 'Home', icon: Home },
-    { id: 'today', label: 'Today', icon: Calendar },
-    { id: 'calendar', label: 'Calendar', icon: CalendarDays },
-    { id: 'timeline', label: 'Timeline', icon: Clock },
-    { id: 'focus', label: 'Focus', icon: Zap },
-    { id: 'goals', label: 'Goals', icon: Target },
-    { id: 'habits', label: 'Habits', icon: Repeat },
-    { id: 'alarms', label: 'Alarms', icon: AlarmClock },
-    { id: 'diary', label: 'Diary', icon: BookOpen },
-    { id: 'categories', label: 'Categories', icon: Folder },
-    { id: 'finance', label: 'Money', icon: Wallet },
-    { id: 'stats', label: 'Streak', icon: TrendingUp },
-    { id: 'maintenance', label: 'Vehicle & Home', icon: Wrench },
-    { id: 'documents', label: 'Documents', icon: FileLock2 },
-    ...(hasPasswordVault() ? [{ id: 'vault' as const, label: 'Password Vault', icon: KeyRound }] : []),
+    { items: [{ id: 'home', label: 'Home', icon: Home }] },
+    {
+      title: 'Productivity',
+      items: [
+        { id: 'today', label: 'Today', icon: Calendar },
+        { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+        { id: 'timeline', label: 'Timeline', icon: Clock },
+        { id: 'focus', label: 'Focus', icon: Zap },
+        { id: 'alarms', label: 'Alarms', icon: AlarmClock },
+      ],
+    },
+    {
+      title: 'Habits & Goals',
+      items: [
+        { id: 'habits', label: 'Habits', icon: Repeat },
+        { id: 'goals', label: 'Goals', icon: Target },
+        { id: 'stats', label: 'Progress', icon: TrendingUp },
+        { id: 'diary', label: 'Diary', icon: BookOpen },
+      ],
+    },
+    { title: 'Finance', items: [{ id: 'finance', label: 'Money', icon: Wallet }] },
+    { title: 'Assets', items: [{ id: 'maintenance', label: 'Vehicle & Home', icon: Wrench }] },
+    {
+      title: 'Secure Storage',
+      items: [
+        { id: 'documents', label: 'Documents', icon: FileLock2 },
+        ...(hasPasswordVault() ? [{ id: 'vault' as const, label: 'Password Vault', icon: KeyRound }] : []),
+      ],
+    },
   ];
 }
+
+/** Setup screens, shown below the main sections. */
+const CATEGORIES_ITEM: NavItem = { id: 'categories', label: 'Categories', icon: Folder };
 
 const todayLabel = () =>
   new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -65,31 +88,66 @@ const Brand: React.FC = () => (
 );
 
 const navButtonClass = (isActive: boolean) =>
-  `flex w-full items-center gap-3 px-3 py-2.5 min-h-11 rounded-xl text-sm font-semibold transition-colors ${
+  // Compact rows from lg (desktop sidebar, mouse); the phone drawer keeps 44px touch targets.
+  `flex w-full items-center gap-3 px-3 py-2.5 min-h-11 lg:py-1.5 lg:min-h-9 rounded-xl text-sm font-semibold transition-colors ${
     isActive
       ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300'
       : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
   }`;
 
+const NavButton: React.FC<{ item: NavItem; activeTab: ActiveTab; onSelect: (tab: ActiveTab) => void }> = ({
+  item,
+  activeTab,
+  onSelect,
+}) => {
+  const Icon = item.icon;
+  const isActive = activeTab === item.id;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(item.id)}
+      aria-current={isActive ? 'page' : undefined}
+      className={navButtonClass(isActive)}
+    >
+      <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
+      <span>{item.label}</span>
+    </button>
+  );
+};
+
 const NavList: React.FC<{ activeTab: ActiveTab; onSelect: (tab: ActiveTab) => void }> = ({ activeTab, onSelect }) => (
   <>
-    {navItems().map((tab) => {
-      const Icon = tab.icon;
-      const isActive = activeTab === tab.id;
+    {navSections().map((section) => {
+      const headingId = section.title ? `nav-${section.title.replace(/\W+/g, '-').toLowerCase()}` : undefined;
       return (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onSelect(tab.id)}
-          aria-current={isActive ? 'page' : undefined}
-          className={navButtonClass(isActive)}
+        <div
+          key={section.title ?? 'top'}
+          role="group"
+          aria-labelledby={headingId}
+          className="flex flex-col gap-1 lg:gap-0.5"
         >
-          <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
-          <span>{tab.label}</span>
-        </button>
+          {section.title && (
+            <p
+              id={headingId}
+              className="px-3 pt-4 pb-1 lg:pt-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500"
+            >
+              {section.title}
+            </p>
+          )}
+          {section.items.map((item) => (
+            <NavButton key={item.id} item={item} activeTab={activeTab} onSelect={onSelect} />
+          ))}
+        </div>
       );
     })}
   </>
+);
+
+const SettingsButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
+  <button type="button" onClick={onClick} className={navButtonClass(false)}>
+    <Settings className="w-5 h-5 shrink-0 stroke-2" />
+    <span>Settings</span>
+  </button>
 );
 
 interface SidebarProps {
@@ -98,17 +156,21 @@ interface SidebarProps {
   onOpenQuickAdd: () => void;
 }
 
-/** Fixed left navigation on desktop (lg and up). */
+/** Fixed left navigation on desktop (lg and up). Settings is the header's gear button here. */
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onChangeTab, onOpenQuickAdd }) => {
   return (
     <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-64 z-30 flex-col overflow-hidden bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 px-4 py-5 select-none">
-      <div className="mb-6 shrink-0">
+      <div className="mb-4 shrink-0">
         <Brand />
       </div>
 
-      <nav className="flex flex-col gap-1 flex-1 min-h-0 overflow-y-auto">
+      <nav aria-label="Main" className="flex flex-col gap-0.5 flex-1 min-h-0 overflow-y-auto">
         <NavList activeTab={activeTab} onSelect={onChangeTab} />
       </nav>
+
+      <div className="shrink-0 mt-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+        <NavButton item={CATEGORIES_ITEM} activeTab={activeTab} onSelect={onChangeTab} />
+      </div>
 
       {/* New Task / Finance entry button (replaces FAB on desktop) */}
       {activeTab !== 'vault' && <button
@@ -298,18 +360,14 @@ export const MobileSidebar: React.FC<MobileSidebarProps> = ({
           <NavList activeTab={activeTab} onSelect={select} />
         </nav>
 
-        <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
-          <button
-            type="button"
+        <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] flex flex-col gap-1">
+          <NavButton item={CATEGORIES_ITEM} activeTab={activeTab} onSelect={select} />
+          <SettingsButton
             onClick={() => {
               onClose();
               onOpenSettings();
             }}
-            className={navButtonClass(false)}
-          >
-            <Settings className="w-5 h-5 shrink-0 stroke-2" />
-            <span>Settings</span>
-          </button>
+          />
         </div>
       </div>
     </>
