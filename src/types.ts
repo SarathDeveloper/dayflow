@@ -351,8 +351,26 @@ export interface Debt {
   note?: string;
   paid: boolean;
   paidAt?: string;
+  /** A loan repaid in EMIs (home, car, personal loan). `amount` is the principal. */
+  loan?: DebtLoanTerms;
+  /** Part payments so far (for a loan: prepayments on top of the EMIs). */
+  payments?: DebtPayment[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DebtLoanTerms {
+  /** Yearly interest rate in percent, e.g. 10.5. 0 for an interest-free EMI. */
+  annualRate: number;
+  tenureMonths: number;
+  /** YYYY-MM-DD of the first EMI. */
+  firstEmiDate: string;
+}
+
+export interface DebtPayment {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
 }
 
 export interface SavingsGoal {

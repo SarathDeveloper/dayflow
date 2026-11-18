@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { Debt, DebtDirection } from '../types';
+import { addMonths, emiAmount } from '../lib/debtPlanner';
+import { formatRupees } from '../lib/money';
 import { Button } from './ui/Button';
 
 interface DebtModalProps {
@@ -24,6 +26,10 @@ export const DebtModal: React.FC<DebtModalProps> = ({
   const [date, setDate] = useState(selectedDate);
   const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
+  const [isLoan, setIsLoan] = useState(false);
+  const [rate, setRate] = useState('');
+  const [tenure, setTenure] = useState('');
+  const [firstEmi, setFirstEmi] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -34,6 +40,10 @@ export const DebtModal: React.FC<DebtModalProps> = ({
       setDate(initialDebt.date);
       setDueDate(initialDebt.dueDate || '');
       setNote(initialDebt.note || '');
+      setIsLoan(Boolean(initialDebt.loan));
+      setRate(initialDebt.loan ? String(initialDebt.loan.annualRate) : '');
+      setTenure(initialDebt.loan ? String(initialDebt.loan.tenureMonths) : '');
+      setFirstEmi(initialDebt.loan?.firstEmiDate ?? '');
     } else {
       setDirection('lent');
       setPersonName('');
@@ -41,18 +51,31 @@ export const DebtModal: React.FC<DebtModalProps> = ({
       setDate(selectedDate);
       setDueDate('');
       setNote('');
+      setIsLoan(false);
+      setRate('');
+      setTenure('');
+      setFirstEmi('');
     }
   }, [initialDebt, selectedDate, isOpen]);
 
   if (!isOpen) return null;
+
+  const rateValue = Number(rate || 0);
+  const tenureValue = Math.round(Number(tenure));
+  const loanValid = isLoan && rateValue >= 0 && rateValue <= 60 && tenureValue >= 1 && tenureValue <= 480;
+  const previewEmi = loanValid ? emiAmount(parseFloat(amount) || 0, rateValue, tenureValue) : 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const parsed = parseFloat(amount);
     if (!parsed || parsed <= 0 || Number.isNaN(parsed)) return;
     if (!personName.trim()) return;
+    if (isLoan && !loanValid) return;
 
     onSave({
+      loan: isLoan
+        ? { annualRate: rateValue, tenureMonths: tenureValue, firstEmiDate: firstEmi || addMonths(date, 1) }
+        : undefined,
       id: initialDebt?.id,
       direction,
       personName: personName.trim(),
@@ -169,6 +192,40 @@ export const DebtModal: React.FC<DebtModalProps> = ({
                 className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-3">
+            <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+              <input type="checkbox" checked={isLoan} onChange={(e) => setIsLoan(e.target.checked)} className="w-4 h-4" />
+              Loan repaid in EMIs (home, car, personal, credit card)
+            </label>
+            {isLoan && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Interest (% per year)
+                    <input type="number" inputMode="decimal" min="0" max="60" step="0.01" value={rate}
+                      onChange={(e) => setRate(e.target.value)} placeholder="10.5"
+                      className="mt-1 w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </label>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Tenure (months)
+                    <input type="number" inputMode="numeric" min="1" max="480" step="1" required value={tenure}
+                      onChange={(e) => setTenure(e.target.value)} placeholder="24"
+                      className="mt-1 w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </label>
+                </div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  First EMI date
+                  <input type="date" value={firstEmi || addMonths(date, 1)} min={date}
+                    onChange={(e) => setFirstEmi(e.target.value)}
+                    className="mt-1 w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+                <p className="text-xs text-slate-600 dark:text-slate-300" aria-live="polite">
+                  {previewEmi > 0 ? <>EMI: <strong>{formatRupees(previewEmi)}</strong> per month for {tenureValue} months</> : 'Enter the amount, interest and tenure to see the EMI.'}
+                </p>
+              </>
+            )}
           </div>
 
           <div>

@@ -19,6 +19,7 @@ import {
   ArrowDownRight,
   TrendingUp,
   PiggyBank,
+  BarChart3,
   Receipt,
   AlertCircle,
 } from 'lucide-react';
@@ -47,7 +48,16 @@ import {
 } from '../data/financeCategories';
 import { CategorySelect } from './ui/CategorySelect';
 import { recentExpenseCategories } from '../lib/financeRecurrence';
-import { formatPaise } from '../lib/money';
+import { addRupees, formatPaise, fromPaise, toPaise } from '../lib/money';
+import { debtOutstanding } from '../lib/debtPlanner';
+import { forecastMonth } from '../lib/moneyForecast';
+import { QuickEntryBar } from './money/QuickEntryBar';
+import { SplitEntryModal } from './money/SplitEntryModal';
+import { MonthOutlook } from './money/MonthOutlook';
+import { MoneyReports } from './money/MoneyReports';
+import { DebtLoanPanel, DebtPayoffPlanner } from './money/DebtPlanner';
+import type { QuickEntry } from '../lib/quickEntry';
+import type { SplitLine } from '../lib/quickEntry';
 import { computeAccountBalances, todayString } from '../lib/ledger';
 import {
   getDailySpendForMonth,
@@ -119,9 +129,14 @@ interface FinanceViewProps {
   onDismissAlert: (key: string) => void;
   /** Saves a confirmed bank SMS as a normal ledger entry. False keeps it pending. */
   onConfirmBankSms: (partial: Partial<FinanceTransaction>) => boolean;
+  /** Quick-add bar and repeat chips. False when the entry was refused. */
+  onQuickEntry: (entry: QuickEntry) => boolean;
+  /** One payment split across categories. */
+  onSplitEntry: (split: { accountId: string; date: string; note?: string; paymentMethod?: PaymentMethod; lines: SplitLine[] }) => boolean;
+  onAddDebtPayment: (id: string, amount: number, date: string) => void;
 }
 
-type FinanceMode = 'ledger' | 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings';
+type FinanceMode = 'ledger' | 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings' | 'reports';
 type FilterType = 'all' | 'expense' | 'income';
 type FilterPayment = 'all' | PaymentMethod;
 type DebtFilter = 'all' | 'outstanding' | 'settled';
@@ -202,8 +217,12 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onQuickAddSavings,
   onDismissAlert,
   onConfirmBankSms,
+  onQuickEntry,
+  onSplitEntry,
+  onAddDebtPayment,
 }) => {
   const [mode, setMode] = useState<FinanceMode>('ledger');
+  const [isSplitOpen, setIsSplitOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(() => toMonthKey(selectedDate));
   const [budgetInput, setBudgetInput] = useState('');
   const [isEditingBudget, setIsEditingBudget] = useState(false);
@@ -310,6 +329,29 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const expenseCategoryNames = useMemo(
     () => financeCategoryNames('expense', financeCategories),
     [financeCategories]
+  );
+  const incomeCategoryNames = useMemo(
+    () => financeCategoryNames('income', financeCategories),
+    [financeCategories]
+  );
+  const spendableAccounts = useMemo(
+    () => ledger.accounts.filter((account) => !account.isArchived),
+    [ledger.accounts]
+  );
+
+  // The current month, whatever month the views are showing.
+  const outlookToday = todayString();
+  const forecast = useMemo(
+    () =>
+      forecastMonth({
+        today: outlookToday,
+        transactions,
+        accounts: ledger.accounts,
+        billTemplates,
+        billPayments,
+        budget: budgets.find((b) => b.month === outlookToday.slice(0, 7))?.limit ?? null,
+      }),
+    [outlookToday, transactions, ledger.accounts, billTemplates, billPayments, budgets]
   );
 
   useEffect(() => {
@@ -431,13 +473,17 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     return sorted;
   }, [debts, debtFilter]);
 
+  // What is still unpaid (part payments and loan EMIs counted), summed in paise.
+  const today = todayString();
   const outstandingLent = debts
     .filter((d) => d.direction === 'lent' && !d.paid)
-    .reduce((s, d) => s + d.amount, 0);
+    .map((d) => ({ amount: debtOutstanding(d, today) }))
+    .reduce(addRupees, 0);
   const outstandingOwed = debts
     .filter((d) => d.direction === 'owed' && !d.paid)
-    .reduce((s, d) => s + d.amount, 0);
-  const debtNet = outstandingLent - outstandingOwed;
+    .map((d) => ({ amount: debtOutstanding(d, today) }))
+    .reduce(addRupees, 0);
+  const debtNet = fromPaise(toPaise(outstandingLent) - toPaise(outstandingOwed));
 
   // Bills
   const monthBillPayments = useMemo(
@@ -545,6 +591,30 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         <FinanceAlertBanner alerts={financeAlerts} onDismiss={onDismissAlert} />
       )}
 
+      {/* Fast entry and the month ahead (not on the planning tabs) */}
+      {mode !== 'reports' && mode !== 'debts' && mode !== 'bills' && (
+        <QuickEntryBar
+          accounts={spendableAccounts}
+          transactions={transactions}
+          expenseCategories={expenseCategoryNames}
+          incomeCategories={incomeCategoryNames}
+          today={outlookToday}
+          onSave={onQuickEntry}
+          onSplit={() => setIsSplitOpen(true)}
+        />
+      )}
+      {spendableAccounts.length > 0 && (mode === 'ledger' || mode === 'daily' || mode === 'monthly') && (
+        <MonthOutlook forecast={forecast} />
+      )}
+      <SplitEntryModal
+        isOpen={isSplitOpen}
+        accounts={spendableAccounts}
+        expenseCategories={expenseCategoryNames}
+        today={outlookToday}
+        onClose={() => setIsSplitOpen(false)}
+        onSave={onSplitEntry}
+      />
+
       {/* Ledger / Daily / Weekly / Monthly / Bills / Debts / Savings + Filters */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 max-w-full overflow-x-auto no-scrollbar">
@@ -645,9 +715,22 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               Savings
             </span>
           </button>
+          <button
+            onClick={() => setMode('reports')}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${
+              mode === 'reports'
+                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <BarChart3 className="w-3.5 h-3.5" />
+              Reports
+            </span>
+          </button>
         </div>
 
-        {mode !== 'debts' && mode !== 'bills' && mode !== 'savings' && mode !== 'ledger' && (
+        {mode !== 'debts' && mode !== 'bills' && mode !== 'savings' && mode !== 'ledger' && mode !== 'reports' && (
           <button
             onClick={() => setShowFilters((s) => !s)}
             className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
@@ -732,6 +815,17 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
       {/* ============ MONEY LEDGER ============ */}
       {mode === 'ledger' && <LedgerView {...ledger} />}
+
+      {/* ============ REPORTS ============ */}
+      {mode === 'reports' && (
+        <MoneyReports
+          transactions={transactions}
+          accounts={ledger.accounts}
+          debts={debts}
+          billPayments={billPayments}
+          today={outlookToday}
+        />
+      )}
 
       {/* ============ WEEKLY VIEW ============ */}
       {mode === 'weekly' && (
@@ -2150,6 +2244,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </Card>
           </div>
 
+          <DebtPayoffPlanner debts={debts} today={today} />
+
           {/* Filter pills */}
           <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
             {(['outstanding', 'settled', 'all'] as DebtFilter[]).map((f) => (
@@ -2171,13 +2267,15 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
           {filteredDebts.length > 0 ? (
             <div className="space-y-2">
               {filteredDebts.map((debt) => (
-                <DebtRow
-                  key={debt.id}
-                  debt={debt}
-                  onEdit={onEditDebt}
-                  onDelete={onDeleteDebt}
-                  onTogglePaid={onToggleDebtPaid}
-                />
+                <div key={debt.id}>
+                  <DebtRow
+                    debt={debt}
+                    onEdit={onEditDebt}
+                    onDelete={onDeleteDebt}
+                    onTogglePaid={onToggleDebtPaid}
+                  />
+                  <DebtLoanPanel debt={debt} today={today} onAddPayment={onAddDebtPayment} />
+                </div>
               ))}
             </div>
           ) : (

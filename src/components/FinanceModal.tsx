@@ -29,6 +29,7 @@ import {
   type EntryDraft,
 } from '../lib/ledger';
 import { formatPaise, isAmountParseOk, parseAmountInput } from '../lib/money';
+import { evaluateAmount, isAmountExpression } from '../lib/quickEntry';
 
 interface FinanceModalProps {
   isOpen: boolean;
@@ -144,7 +145,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
   );
 
   const amountPaise = useMemo(() => {
-    const parsed = parseAmountInput(amount);
+    const parsed = parseAmountInput(isAmountExpression(amount) ? String(evaluateAmount(amount) ?? '') : amount);
     return isAmountParseOk(parsed) ? parsed.paise : 0;
   }, [amount]);
 
@@ -175,7 +176,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
     e.preventDefault();
     if (isSubmitting) return;
 
-    const parsed = parseAmountInput(amount);
+    const parsed = parseAmountInput(isAmountExpression(amount) ? String(evaluateAmount(amount) ?? amount) : amount);
     if (!isAmountParseOk(parsed)) {
       setError(parsed.error);
       return;
@@ -296,20 +297,41 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
                 ₹
               </span>
               <input
-                type="number"
+                type="text"
                 inputMode="decimal"
-                min="0.01"
-                step="0.01"
                 required
                 value={amount}
                 onChange={(e) => {
                   setAmount(e.target.value);
                   setError(null);
                 }}
-                placeholder="0.00"
+                onBlur={() => {
+                  // "120+45*2" becomes 210 when the field is left.
+                  if (isAmountExpression(amount)) {
+                    const total = evaluateAmount(amount);
+                    if (total !== null) setAmount(String(total));
+                  }
+                }}
+                placeholder="0.00 or 120+45"
+                aria-describedby="amount-sum"
                 className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl pl-8 pr-3.5 py-2.5 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-lg"
                 autoFocus
               />
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              {(['+', '-', '×', '÷'] as const).map((operator) => (
+                <button key={operator} type="button" aria-label={`Insert ${operator}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setAmount((value) => `${value}${operator === '×' ? '*' : operator === '÷' ? '/' : operator}`)}
+                  className="min-h-9 min-w-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+                  {operator}
+                </button>
+              ))}
+              <span id="amount-sum" className="ml-1 text-xs font-semibold text-slate-500 dark:text-slate-400" aria-live="polite">
+                {isAmountExpression(amount)
+                  ? evaluateAmount(amount) !== null ? `= ${formatPaise(Math.round((evaluateAmount(amount) ?? 0) * 100))}` : 'Check the sum'
+                  : 'Type a sum like 120+45'}
+              </span>
             </div>
           </div>
 

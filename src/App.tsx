@@ -67,6 +67,9 @@ import {
   type EntryDraft,
   type TransferDraft,
 } from './lib/ledger';
+import { addRupees } from './lib/money';
+import { debtOutstanding } from './lib/debtPlanner';
+import type { PaymentMethod } from './types';
 import { NotificationBanner } from './components/NotificationBanner';
 import { SettingsModal } from './components/SettingsModal';
 import { BottomNav } from './components/BottomNav';
@@ -2790,6 +2793,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 date: partial.date ?? d.date,
                 dueDate: partial.dueDate,
                 note: partial.note,
+                loan: partial.loan,
                 updatedAt: now,
               }
             : d
@@ -2804,12 +2808,104 @@ export default function App({ skipInitialLock = false }: AppProps) {
         date: partial.date || selectedDate,
         dueDate: partial.dueDate,
         note: partial.note,
+        loan: partial.loan,
         paid: false,
         createdAt: now,
         updatedAt: now,
       };
       setDebts((prev) => [newDebt, ...prev]);
     }
+  };
+
+  /** A part payment (or a loan prepayment). Fully paying it off marks the debt paid. */
+  const handleAddDebtPayment = (id: string, amount: number, date: string) => {
+    const now = new Date().toISOString();
+    setDebts((prev) =>
+      prev.map((d) => {
+        if (d.id !== id || !(amount > 0)) return d;
+        const next: Debt = {
+          ...d,
+          payments: [...(d.payments ?? []), { id: `dpay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, date, amount }],
+          updatedAt: now,
+        };
+        return debtOutstanding(next, date) <= 0 ? { ...next, paid: true, paidAt: now } : next;
+      })
+    );
+  };
+
+  /** One line from the quick-add bar or a repeated entry: the same rules as the full form. */
+  const handleQuickEntry = (entry: {
+    type: 'income' | 'expense';
+    amount: number;
+    category: string;
+    note?: string;
+    paymentMethod?: PaymentMethod;
+    accountId?: string;
+  }): boolean => {
+    const accountId = entry.accountId && accounts.some((a) => a.id === entry.accountId && !a.isArchived)
+      ? entry.accountId
+      : resolveDefaultAccountId(accounts, ledgerSettings[0]);
+    if (!accountId) {
+      setIsAccountModalOpen(true);
+      return false;
+    }
+    const account = accounts.find((a) => a.id === accountId);
+    const draft: EntryDraft = {
+      type: entry.type,
+      amount: entry.amount,
+      accountId,
+      category: entry.category,
+      note: entry.note,
+      paymentMethod: entry.paymentMethod ?? (account?.type === 'cash' ? 'cash' : 'bank_transfer'),
+      date: todayString(),
+      time: nowTimeString(),
+    };
+    const validation = validateEntry(draft, {
+      accounts,
+      transactions,
+      settings: ledgerSettings[0] || { allowNegativeBalance: false },
+    });
+    if (isLedgerError(validation)) {
+      void showAlert(ledgerErrorDialog(validation));
+      return false;
+    }
+    setTransactions((prev) => [buildIncomeOrExpense(draft), ...prev]);
+    return true;
+  };
+
+  /** One payment split across categories: validated as one total, saved as one entry per part. */
+  const handleSplitEntry = (split: {
+    accountId: string;
+    date: string;
+    note?: string;
+    paymentMethod?: PaymentMethod;
+    lines: { category: string; amount: number }[];
+  }): boolean => {
+    const lines = split.lines.filter((line) => line.amount > 0);
+    const total = lines.reduce(addRupees, 0);
+    const base: EntryDraft = {
+      type: 'expense',
+      amount: total,
+      accountId: split.accountId,
+      category: lines[0]?.category ?? 'Other',
+      note: split.note,
+      paymentMethod: split.paymentMethod,
+      date: split.date,
+      time: nowTimeString(),
+    };
+    const validation = validateEntry(base, {
+      accounts,
+      transactions,
+      settings: ledgerSettings[0] || { allowNegativeBalance: false },
+    });
+    if (isLedgerError(validation)) {
+      void showAlert(ledgerErrorDialog(validation));
+      return false;
+    }
+    const now = new Date();
+    const records = lines.map((line) => buildIncomeOrExpense({ ...base, amount: line.amount, category: line.category }, { now }));
+    setTransactions((prev) => [...records, ...prev]);
+    return true;
   };
 
   const handleDeleteDebt = async (id: string) => {
@@ -3860,6 +3956,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onConfirmBankSms={(partial) =>
               handleSaveTransaction(partial, { allowOverdraft: true }) === true
             }
+            onQuickEntry={handleQuickEntry}
+            onSplitEntry={handleSplitEntry}
+            onAddDebtPayment={handleAddDebtPayment}
           />
         )}
       </main>
