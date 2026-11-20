@@ -51,7 +51,7 @@ export function MonthOutlook({ forecast }: { forecast: MonthForecast }) {
               ['Bills still due', forecast.billsDueTotal],
               ['Expected rest of month', restOfMonth],
               ['Projected month total', forecast.projectedSpend],
-              ['Cash and bank now', forecast.balanceNow],
+              ['Spendable now', forecast.balanceNow],
               ['Projected month-end balance', forecast.projectedEndBalance],
             ].map(([label, value]) => (
               <div key={label as string} className="flex justify-between gap-2">

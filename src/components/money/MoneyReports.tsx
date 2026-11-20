@@ -8,7 +8,10 @@ import { monthKeyOf } from '../../lib/ledger';
 import { Card } from '../ui/Card';
 
 interface Props {
+  /** Spending view: without savings-only banks' own entries. */
   transactions: FinanceTransaction[];
+  /** Every entry, for net worth. */
+  allTransactions?: FinanceTransaction[];
   accounts: Account[];
   debts: Debt[];
   billPayments: BillPayment[];
@@ -29,13 +32,14 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: 'goo
 }
 
 /** Year view, category trends, net worth over time and likely subscriptions. */
-export function MoneyReports({ transactions, accounts, debts, billPayments, today }: Props) {
+export function MoneyReports({ transactions, allTransactions, accounts, debts, billPayments, today }: Props) {
   const thisYear = Number(today.slice(0, 4));
   const [year, setYear] = useState(thisYear);
   const report = useMemo(() => yearReport(transactions, year), [transactions, year]);
   const lastMonth = year === thisYear ? monthKeyOf(today) : `${year}-12`;
   const trends = useMemo(() => categoryTrends(transactions, lastMonth, 6), [transactions, lastMonth]);
-  const worth = useMemo(() => netWorthSeries(accounts, transactions, debts, lastMonth, today, 12), [accounts, transactions, debts, lastMonth, today]);
+  // Net worth counts every account, savings-only banks included.
+  const worth = useMemo(() => netWorthSeries(accounts, allTransactions ?? transactions, debts, lastMonth, today, 12), [accounts, allTransactions, transactions, debts, lastMonth, today]);
   const subscriptions = useMemo(() => findSubscriptions(transactions, billPayments, today), [transactions, billPayments, today]);
   const maxMonth = Math.max(1, ...report.months.map((month) => Math.max(month.income, month.expense)));
   const firstYear = useMemo(() => transactions.reduce((min, tx) => Math.min(min, Number(tx.date.slice(0, 4)) || min), thisYear), [transactions, thisYear]);
@@ -68,7 +72,7 @@ export function MoneyReports({ transactions, accounts, debts, billPayments, toda
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Kpi label="Income" value={formatRupees(report.income)} />
         <Kpi label="Spent" value={formatRupees(report.expense)} />
-        <Kpi label="Kept" value={formatRupees(report.net)} tone={report.net >= 0 ? 'good' : 'bad'} />
+        <Kpi label="Left over" value={formatRupees(report.net)} tone={report.net >= 0 ? 'good' : 'bad'} />
         <Kpi label="Savings rate" value={`${report.savingsRate}%`} tone={report.savingsRate >= 20 ? 'good' : undefined} />
       </div>
 

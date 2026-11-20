@@ -1,5 +1,6 @@
 import { countsAsSpending } from './moneyLinks';
 import type { FinanceTransaction, MonthlyBudget, Task } from '../types';
+import { effectiveMonthlyBudget } from './budgetCarry';
 import { fromPaise, toPaise } from './money';
 
 /** What the Android home-screen widgets render. Kept small: it is stored as one JSON string. */
@@ -47,6 +48,6 @@ export function buildWidgetSnapshot(
     total: todays.length,
     spentToday: fromPaise(todayPaise),
     spentMonth: fromPaise(monthPaise),
-    monthBudget: budgets.find((budget) => budget.month === month)?.limit ?? 0,
+    monthBudget: effectiveMonthlyBudget(budgets, month)?.limit ?? 0,
   };
 }

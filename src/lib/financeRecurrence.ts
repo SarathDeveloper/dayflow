@@ -1,4 +1,4 @@
-import { countsAsSpending } from './moneyLinks';
+import { countsAsIncome, countsAsSpending } from './moneyLinks';
 import type { FinanceTransaction, FinanceRecurrenceType } from '../types';
 import { todayString } from './ledger';
 
@@ -129,6 +129,22 @@ export function materializeRecurringTransactions(
  * Get the most-used expense categories from transaction history (most recent first).
  * Used for quick-add chips.
  */
+/** Most recently used categories of one kind, newest first (for chips and the form default). */
+export function recentCategories(
+  transactions: FinanceTransaction[],
+  kind: 'income' | 'expense',
+  limit = 4
+): string[] {
+  const counts = kind === 'income' ? countsAsIncome : countsAsSpending;
+  const seen = new Set<string>();
+  const sorted = transactions.filter((t) => counts(t)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const tx of sorted) {
+    seen.add(tx.category);
+    if (seen.size >= limit) break;
+  }
+  return Array.from(seen);
+}
+
 export function recentExpenseCategories(
   transactions: FinanceTransaction[],
   limit = 5

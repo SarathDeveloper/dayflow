@@ -10,7 +10,7 @@ import { computeAccountBalances, monthKeyOf } from './ledger';
 import { fromPaise, toPaise } from './money';
 
 /** Accounts money is spent from. Gold and stocks are wealth, not spending money. */
-const SPENDABLE = new Set<Account['type']>(['cash', 'savings', 'current', 'other']);
+const SPENDABLE = new Set<Account['type']>(['cash', 'savings', 'current', 'other', 'credit_card']);
 /** Days of history the daily spending pace is averaged over. */
 export const PACE_DAYS = 30;
 
@@ -139,7 +139,7 @@ export function forecastMonth(input: {
   const upToToday = transactions.filter((tx) => tx.date <= today);
   const balances = computeAccountBalances(accounts, upToToday);
   const balancePaise = accounts
-    .filter((account) => !account.isArchived && SPENDABLE.has(account.type))
+    .filter((account) => !account.isArchived && !account.savingsOnly && SPENDABLE.has(account.type))
     .reduce((sum, account) => sum + (balances.get(account.id) ?? 0), 0);
   const endPaise = balancePaise - pacePerDay * daysAfterToday - billsPaise;
 

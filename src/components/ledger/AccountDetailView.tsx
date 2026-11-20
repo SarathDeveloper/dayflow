@@ -186,7 +186,7 @@ export const AccountDetailView: React.FC<AccountDetailViewProps> = ({
           </div>
         </div>
 
-        {!account.isArchived && (
+        {!account.isArchived && !account.savingsOnly && (
           <div className="grid grid-cols-2 gap-2 mt-3">
             <Button variant="primary" size="sm" onClick={() => onAddIncome(account.id)}>
               <Plus className="w-3.5 h-3.5" /> Income
@@ -293,7 +293,7 @@ export const AccountDetailView: React.FC<AccountDetailViewProps> = ({
               ? 'Income, expenses and transfers for this account will appear here.'
               : 'Adjust or clear the filters to see this account history.'
           }
-          actionLabel={rows.length === 0 && !account.isArchived ? 'Add expense' : undefined}
+          actionLabel={rows.length === 0 && !account.isArchived && !account.savingsOnly ? 'Add expense' : undefined}
           onAction={() => onAddExpense(account.id)}
           secondaryLabel={hasFilters ? 'Clear filters' : undefined}
           onSecondary={clearFilters}

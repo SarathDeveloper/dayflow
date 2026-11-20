@@ -134,6 +134,17 @@ export const LedgerTransactionRow: React.FC<LedgerTransactionRowProps> = ({
           )}
         </button>
 
+        {onOpen ? (
+          // Tapping anywhere opens the details sheet (Edit and Delete live there).
+          <button
+            type="button"
+            onClick={() => onOpen(tx)}
+            className="text-right shrink-0 self-stretch pl-2"
+            aria-label={`Open ${headline}`}
+          >
+            <p className={`text-sm font-black ${amountClass}`}>{amountText}</p>
+          </button>
+        ) : (
         <div className="text-right shrink-0">
           <p className={`text-sm font-black ${amountClass}`}>{amountText}</p>
           <div className="flex items-center justify-end gap-1 mt-0.5">
@@ -161,6 +172,7 @@ export const LedgerTransactionRow: React.FC<LedgerTransactionRowProps> = ({
             )}
           </div>
         </div>
+        )}
       </div>
     </Card>
   );

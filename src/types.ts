@@ -89,6 +89,8 @@ export interface NotificationSettings {
     start: string; // "22:00"
     end: string;   // "07:00"
   };
+  /** Phone reminders for bills, EMIs, card dues and debts. Missing means on. */
+  moneyReminders?: boolean;
 }
 
 export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents' | 'notifications';
@@ -240,7 +242,7 @@ export interface FocusSession {
 // Money ledger: accounts
 // ---------------------------------------------------------------------------
 
-export type AccountType = 'cash' | 'savings' | 'current' | 'gold' | 'stocks' | 'other';
+export type AccountType = 'cash' | 'savings' | 'current' | 'gold' | 'stocks' | 'other' | 'credit_card';
 
 export interface Account {
   id: string;
@@ -254,6 +256,15 @@ export interface Account {
   openingBalance: number;
   /** Archived accounts keep their history but are excluded from totals/pickers. */
   isArchived: boolean;
+  /**
+   * Kept for future savings (picked on the Savings page): hidden from the Money
+   * ledger, its totals and the income / expense pickers; shown on Savings only.
+   */
+  savingsOnly?: boolean;
+  /** Credit card only (lib/creditCard.ts): limit in rupees, statement day and due day (1-31). */
+  creditLimit?: number;
+  statementDay?: number;
+  dueDay?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -269,6 +280,9 @@ export interface LedgerSettings {
   defaultAccountId?: string;
   /** Last savings, gold, or stocks account a save was moved into. */
   defaultSavingsAccountId?: string;
+  /** Your UPI ID and name, put in "pay me back" reminders to friends (lib/friendSplit.ts). */
+  upiId?: string;
+  upiName?: string;
   updatedAt: string;
 }
 
@@ -331,6 +345,8 @@ export interface MonthlyBudget {
   userId?: string;
   month: string; // YYYY-MM
   limit: number;
+  /** A "budget had lapsed" marker written once when budgets started carrying over (see budgetCarry.ts). */
+  carryStop?: boolean;
   updatedAt?: string;
 }
 
@@ -340,6 +356,8 @@ export interface CategoryBudget {
   month: string; // YYYY-MM
   category: string;
   limit: number;
+  /** A "budget had lapsed" marker written once when budgets started carrying over (see budgetCarry.ts). */
+  carryStop?: boolean;
   updatedAt?: string;
 }
 
@@ -409,6 +427,25 @@ export interface SavingsEntry {
   date: string; // YYYY-MM-DD
   amount: number; // how much saved that day
   note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A named savings goal (lib/moneyGoals.ts). Synced like every other collection. */
+export interface MoneyGoal {
+  id: string;
+  userId?: string;
+  name: string;
+  /** Rupees to reach. */
+  target: number;
+  /** YYYY-MM-DD to reach it by (local), optional. */
+  targetDate?: string;
+  /** Account whose balance counts as saved (usually a savings-only bank). */
+  accountId?: string;
+  /** Saved so far when no account is linked, typed by hand. */
+  savedAmount?: number;
+  /** Finished or set aside: listed after active goals. */
+  archived?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -290,6 +290,19 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         )}
       </section>
 
+      {/* Money */}
+      <section aria-labelledby="notif-money">
+        <h3 id="notif-money" className={sectionLabel}>Money</h3>
+        <Card className="px-4">
+          <SettingSwitch
+            label="Bills, EMIs and debts"
+            description="Reminds you 2 days before and on the due day, at 9 AM."
+            checked={settings.moneyReminders !== false}
+            onChange={(moneyReminders) => update({ moneyReminders })}
+          />
+        </Card>
+      </section>
+
       {/* Sound */}
       <section aria-labelledby="notif-sound">
         <h3 id="notif-sound" className={sectionLabel}>Sound</h3>

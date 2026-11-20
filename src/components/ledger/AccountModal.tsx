@@ -25,6 +25,9 @@ const emptyForm = {
   lastFourDigits: '',
   openingBalance: '0',
   isArchived: false,
+  creditLimit: '',
+  statementDay: '',
+  dueDay: '',
 };
 
 export const AccountModal: React.FC<AccountModalProps> = ({
@@ -48,8 +51,14 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         bankName: initialAccount.bankName || '',
         accountNickname: initialAccount.accountNickname || '',
         lastFourDigits: initialAccount.lastFourDigits || '',
-        openingBalance: String(initialAccount.openingBalance ?? 0),
+        // A card's opening balance is stored below zero (what was owed); the form shows it as owed.
+        openingBalance: String(
+          initialAccount.type === 'credit_card' ? Math.abs(initialAccount.openingBalance ?? 0) : initialAccount.openingBalance ?? 0
+        ),
         isArchived: Boolean(initialAccount.isArchived),
+        creditLimit: initialAccount.creditLimit ? String(initialAccount.creditLimit) : '',
+        statementDay: initialAccount.statementDay ? String(initialAccount.statementDay) : '',
+        dueDay: initialAccount.dueDay ? String(initialAccount.dueDay) : '',
       });
     } else {
       setForm(emptyForm);
@@ -64,6 +73,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   if (!isOpen) return null;
 
   const hidesBankDetails = form.type === 'cash' || form.type === 'gold' || form.type === 'stocks';
+  const isCard = form.type === 'credit_card';
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -105,6 +115,20 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       return;
     }
 
+    const day = (value: string) => {
+      const n = Number(value);
+      return Number.isInteger(n) && n >= 1 && n <= 31 ? n : undefined;
+    };
+    const limit = Number(form.creditLimit.replace(/[₹,\s]/g, ''));
+    if (isCard && (form.statementDay.trim() !== '') !== (form.dueDay.trim() !== '')) {
+      setError('Enter both the statement day and the due day, or neither.');
+      return;
+    }
+    if (isCard && ((form.statementDay && !day(form.statementDay)) || (form.dueDay && !day(form.dueDay)))) {
+      setError('Statement and due days are 1 to 31.');
+      return;
+    }
+
     const saved = await onSave({
       id: initialAccount?.id,
       name,
@@ -112,8 +136,11 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       bankName: hidesBankDetails ? undefined : form.bankName.trim() || undefined,
       accountNickname: form.accountNickname.trim() || undefined,
       lastFourDigits: hidesBankDetails ? undefined : digits || undefined,
-      openingBalance: Math.round(opening * 100) / 100,
+      openingBalance: (isCard ? -1 : 1) * Math.round(opening * 100) / 100,
       isArchived: form.isArchived,
+      creditLimit: isCard && limit > 0 ? Math.round(limit * 100) / 100 : undefined,
+      statementDay: isCard ? day(form.statementDay) : undefined,
+      dueDay: isCard ? day(form.dueDay) : undefined,
     });
     // Keep the form open (with the user's input) if the save was refused.
     if (saved === false) return;
@@ -225,9 +252,32 @@ export const AccountModal: React.FC<AccountModalProps> = ({
             />
           </div>
 
+          {isCard && (
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                ['creditLimit', 'Limit ₹', '100000'],
+                ['statementDay', 'Statement day', '15'],
+                ['dueDay', 'Due day', '5'],
+              ] as const).map(([key, label, hint]) => (
+                <div key={key}>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{label}</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    value={form[key]}
+                    onChange={(e) => update(key, e.target.value)}
+                    placeholder={hint}
+                    className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Opening balance
+              {isCard ? 'Owed on the card now' : 'Opening balance'}
             </label>
             <div className="relative">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400 font-bold">
@@ -244,7 +294,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({
               />
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              {form.type === 'gold' || form.type === 'stocks'
+              {isCard
+                ? 'Spend on the card as expenses; pay its bill as a transfer from a bank.'
+                : form.type === 'gold' || form.type === 'stocks'
                 ? 'Rupees already held here before you started tracking. This is a value, not grams or shares.'
                 : 'The balance already in this account before you started tracking.'}
             </p>

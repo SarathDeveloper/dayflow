@@ -25,17 +25,18 @@ export function QuickEntryBar({ accounts, transactions, expenseCategories, incom
   const [saved, setSaved] = useState('');
   const context = useMemo(() => ({ expenseCategories, incomeCategories, accounts }), [expenseCategories, incomeCategories, accounts]);
   const parsed = useMemo(() => parseQuickEntry(text, context), [text, context]);
-  const repeats = useMemo(() => repeatableEntries(transactions, today), [transactions, today]);
+  // Only repeat entries from the accounts offered here (not savings-only or archived ones).
+  const repeats = useMemo(() => {
+    const offered = new Set(accounts.map((account) => account.id));
+    return repeatableEntries(transactions.filter((tx) => !tx.accountId || offered.has(tx.accountId)), today);
+  }, [accounts, transactions, today]);
   const accountName = parsed?.accountId ? accounts.find((account) => account.id === parsed.accountId)?.name : undefined;
   const method = parsed?.paymentMethod ? ALL_PAYMENT_METHODS.find((item) => item.value === parsed.paymentMethod)?.label : undefined;
 
   const save = (entry: QuickEntry, label: string) => {
-    if (onSave(entry)) {
-      setSaved(`Added ${label}`);
-      window.setTimeout(() => setSaved(''), 2500);
-      return true;
-    }
-    return false;
+    // The app shows an "Added … · Undo" toast; no second confirmation here.
+    void label;
+    return onSave(entry);
   };
 
   const submit = () => {

@@ -344,10 +344,15 @@ export function availableBalancePaise(
   transactions: FinanceTransaction[],
   ignoreTxId?: string
 ): number {
-  return computeAccountBalance(
+  const balance = computeAccountBalance(
     account,
     ignoreTxId ? transactions.filter((tx) => tx.id !== ignoreTxId) : transactions
   );
+  // A credit card spends below zero, up to its limit (or without a check when none is set).
+  if (account.type === 'credit_card') {
+    return account.creditLimit && account.creditLimit > 0 ? balance + toPaise(account.creditLimit) : Number.MAX_SAFE_INTEGER;
+  }
+  return balance;
 }
 
 function findAccount(ctx: ValidationContext, accountId?: string) {
@@ -828,9 +833,12 @@ export function activeAccounts(accounts: Account[]): Account[] {
   return accounts.filter((a) => !a.isArchived);
 }
 
-/** Accounts the user can post new money to, ordered cash first then by name. */
+/**
+ * Accounts the user can post new money to, ordered cash first then by name.
+ * Savings-only banks are left out: they take savings moves only.
+ */
 export function selectableAccounts(accounts: Account[]): Account[] {
-  return activeAccounts(accounts).sort((a, b) => {
+  return activeAccounts(accounts).filter((a) => !a.savingsOnly).sort((a, b) => {
     if (a.type === 'cash' && b.type !== 'cash') return -1;
     if (b.type === 'cash' && a.type !== 'cash') return 1;
     return a.name.localeCompare(b.name);

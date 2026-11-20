@@ -5,7 +5,7 @@
 
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession, MaintenanceItem } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, MoneyGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession, MaintenanceItem } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -33,9 +33,11 @@ import { materializeBillPayments } from './lib/billMaterializer';
 import { deriveStreakState } from './lib/savingsStreak';
 import {
   countedSavingsAmounts,
-  isSavingsBucketType,
+  savingsBucketTest,
+  ledgerTransactions,
   resolveSavingsDestinationId,
 } from './lib/savingsLedger';
+import { setCategoryBudget, setMonthlyBudget, staleCarryStops } from './lib/budgetCarry';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
 import { cleanReflection, composeReflectionBody, currentTimeString, diaryCollectionFits, diaryPreview, isDiaryMood, reflectionFor, sanitizeDiaryImages, validateDiaryDraft } from './lib/diary';
 import { DEFAULT_PAYMENT_METHOD, financeCategoryError, isCustomFinanceCategory, normalizeCategoryName, reassignDeletedCategoryBudgets, sameCategoryName } from './data/financeCategories';
@@ -76,7 +78,7 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { AppLockScreen } from './components/AppLockScreen';
 import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
-import { dismissTopDialog, setDialogsSuspended, showAlert, showConfirm } from './components/ui/AppDialog';
+import { dismissTopDialog, setDialogsSuspended, showAlert, showChoice, showConfirm } from './components/ui/AppDialog';
 import { closeTopOverlay } from './lib/overlayBack';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
@@ -97,6 +99,8 @@ import {
   type NotificationSetupResult,
 } from './services/nativeNotificationService';
 import { buildExtraReminderPlans, DOCUMENTS_ROUTE, maintenanceIdFromRoute } from './lib/extraReminders';
+import { buildMoneyReminders, moneySectionFromRoute, type MoneySection } from './lib/moneyReminders';
+import { cardDues } from './lib/creditCard';
 import { readDocumentReminders, subscribeDocumentReminders } from './services/documentReminderStore';
 import { loadMaintenanceFromStorage, saveMaintenanceToStorage } from './services/maintenanceStorage';
 import {
@@ -203,6 +207,9 @@ interface AppProps {
   skipInitialLock?: boolean;
 }
 
+/** Device flag: the one-time budget carry-over stop rows were written. */
+const BUDGET_CARRY_MIGRATION_KEY = 'dayflow_budget_carry_v1';
+
 export default function App({ skipInitialLock = false }: AppProps) {
   const todayStr = todayString();
 
@@ -255,6 +262,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const userFinanceCategoriesKey = storageKeys.financeCategories;
   const userDebtsKey = storageKeys.debts;
   const userSavingsKey = storageKeys.savingsGoals;
+  const userMoneyGoalsKey = storageKeys.moneyGoals;
   const userAlertStateKey = storageKeys.alertState;
   const userBillTemplatesKey = storageKeys.billTemplates;
   const userBillPaymentsKey = storageKeys.billPayments;
@@ -366,6 +374,16 @@ export default function App({ skipInitialLock = false }: AppProps) {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse savings goals:', e);
+    }
+    return [];
+  });
+
+  const [moneyGoals, setMoneyGoals] = useState<MoneyGoal[]>(() => {
+    try {
+      const saved = localStorage.getItem(userMoneyGoalsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse money goals:', e);
     }
     return [];
   });
@@ -572,6 +590,13 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const [recentlyDeletedTransaction, setRecentlyDeletedTransaction] = useState<{
     txs: FinanceTransaction[];
   } | null>(null);
+  /** Entries a one-tap add just saved (quick entry, repeat or savings chips), for the Undo toast. */
+  /** A money reminder was tapped: FinanceView opens this section. */
+  const [requestedMoneySection, setRequestedMoneySection] = useState<{ section: MoneySection; at: number } | null>(null);
+  const [recentlyAddedTransactions, setRecentlyAddedTransactions] = useState<{
+    ids: string[];
+    message: string;
+  } | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [backupFolderSupported, setBackupFolderSupported] = useState(false);
   const [backupFolderName, setBackupFolderName] = useState<string | null>(null);
@@ -646,6 +671,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const savedSavingsEntries = localStorage.getItem(userSavingsEntriesKey);
       setSavingsEntries(savedSavingsEntries ? JSON.parse(savedSavingsEntries) : []);
 
+      const savedMoneyGoals = localStorage.getItem(userMoneyGoalsKey);
+      setMoneyGoals(savedMoneyGoals ? JSON.parse(savedMoneyGoals) : []);
+
       const savedAlertState = localStorage.getItem(userAlertStateKey);
       setBudgetAlertState(savedAlertState ? JSON.parse(savedAlertState) : {});
       setFinanceAlerts([]);
@@ -701,7 +729,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     } finally {
       setReadyHydrationToken(String(dataEpoch));
     }
-  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userMaintenanceKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userMoneyGoalsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userMaintenanceKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   usePersistJson(userTasksKey, tasks, canPersist);
@@ -711,6 +739,25 @@ export default function App({ skipInitialLock = false }: AppProps) {
   usePersistJson(userLedgerSettingsKey, ledgerSettings, canPersist);
   usePersistJson(userBudgetsKey, budgets, canPersist);
   usePersistJson(userCatBudgetsKey, categoryBudgets, canPersist);
+
+  // Once per device: budgets that had lapsed before carry-over get a stop row, so
+  // they do not come back. Stop rows never override a real row (budgetCarry.ts).
+  useEffect(() => {
+    if (!canPersist) return;
+    try {
+      if (localStorage.getItem(BUDGET_CARRY_MIGRATION_KEY)) return;
+      localStorage.setItem(BUDGET_CARRY_MIGRATION_KEY, '1');
+    } catch {
+      return;
+    }
+    const stops = staleCarryStops(budgets, categoryBudgets, currentMonthKey(), new Date().toISOString());
+    if (stops.budgets.length) setBudgets((prev) => [...prev, ...stops.budgets.filter((s) => !prev.some((b) => b.id === s.id))]);
+    if (stops.categoryBudgets.length) {
+      setCategoryBudgets((prev) => [...prev, ...stops.categoryBudgets.filter((s) => !prev.some((b) => b.id === s.id))]);
+    }
+    // Runs when stored data is ready; the flag keeps it to once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canPersist]);
   usePersistJson(userFinanceCategoriesKey, financeCategories, canPersist);
   usePersistJson(userDebtsKey, debts, canPersist);
   usePersistJson(userSavingsKey, savingsGoals, canPersist);
@@ -718,6 +765,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   usePersistJson(userBillTemplatesKey, billTemplates, canPersist);
   usePersistJson(userBillPaymentsKey, billPayments, canPersist);
   usePersistJson(userSavingsEntriesKey, savingsEntries, canPersist);
+  usePersistJson(userMoneyGoalsKey, moneyGoals, canPersist);
   usePersistJson(userGoalsKey, goals, canPersist);
   usePersistJson(userHabitsKey, habits, canPersist);
   usePersistJson(userHabitCheckInsKey, habitCheckIns, canPersist);
@@ -762,6 +810,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     debts,
     savingsGoals,
     savingsEntries,
+    moneyGoals,
     billTemplates,
     billPayments,
     goals,
@@ -893,7 +942,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         removeListeners = await registerReminderListeners({
           onDue: (taskId) => {
             // Document / maintenance reminders: the system notification is enough while the app is open.
-            if (taskId === DOCUMENTS_ROUTE || maintenanceIdFromRoute(taskId)) return;
+            if (taskId === DOCUMENTS_ROUTE || maintenanceIdFromRoute(taskId) || moneySectionFromRoute(taskId)) return;
             if (taskId.startsWith('habit:')) {
               setActiveTab('habits');
               return;
@@ -909,6 +958,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
             }
             if (maintenanceIdFromRoute(taskId)) {
               setActiveTab('maintenance');
+              return;
+            }
+            const moneySection = moneySectionFromRoute(taskId);
+            if (moneySection) {
+              setRequestedMoneySection({ section: moneySection, at: Date.now() });
+              setActiveTab('finance');
               return;
             }
             if (taskId === WEEKLY_REPORT_TASK_ID) {
@@ -1007,11 +1062,11 @@ export default function App({ skipInitialLock = false }: AppProps) {
     const timer = window.setTimeout(() => {
       const push = isAppLockEnabled()
         ? clearHomeWidgets()
-        : updateHomeWidgets(buildWidgetSnapshot(localToday, tasks, transactions, budgets));
+        : updateHomeWidgets(buildWidgetSnapshot(localToday, tasks, ledgerTransactions(transactions, accounts), budgets));
       void push.catch((e) => console.warn('Failed to update home widgets:', e));
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [tasks, transactions, budgets, appLocked, localToday]);
+  }, [tasks, transactions, accounts, budgets, appLocked, localToday]);
 
   const pushNativeSchedule = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
@@ -1057,11 +1112,26 @@ export default function App({ skipInitialLock = false }: AppProps) {
   // never collide with (or get cancelled by) the task/habit sync above.
   const maintenanceItemsRef = useRef(maintenanceItems);
   maintenanceItemsRef.current = maintenanceItems;
+  // Bills, EMIs, card dues and debts also remind through this sync (moneyReminders.ts).
+  const moneyReminderInputRef = useRef({ billTemplates, debts, accounts, transactions });
+  moneyReminderInputRef.current = { billTemplates, debts, accounts, transactions };
   const pushExtraReminders = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
+    const today = todayString();
+    const money = moneyReminderInputRef.current;
     const plans = buildExtraReminderPlans({
       documents: readDocumentReminders().entries,
       maintenance: maintenanceItemsRef.current,
+      money:
+        settingsRef.current.moneyReminders === false
+          ? []
+          : buildMoneyReminders({
+              billTemplates: money.billTemplates,
+              billPayments: billPaymentsRef.current,
+              debts: money.debts,
+              cards: cardDues(money.accounts, money.transactions, today),
+              today,
+            }),
       now: new Date(),
     });
     void syncExtraReminders(plans, { granted }).catch((e) => console.warn('Failed to sync document/maintenance reminders:', e));
@@ -1072,7 +1142,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (!isNativeAndroid()) return;
     const timer = setTimeout(() => pushExtraReminders(Boolean(nativeSetup?.granted)), 600);
     return () => clearTimeout(timer);
-  }, [maintenanceItems, documentReminderTick, nativeSetup?.granted, pushExtraReminders]);
+  }, [maintenanceItems, documentReminderTick, nativeSetup?.granted, pushExtraReminders, billTemplates, billPayments, debts, accounts, transactions, settings.moneyReminders]);
   const extraReminderNote = !isNativeAndroid()
     ? 'On the website these reminders show on Today only; notifications need the Android app.'
     : nativeSetup && !nativeSetup.granted
@@ -1092,6 +1162,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       debts,
       savingsGoals,
       savingsEntries,
+      moneyGoals,
       goals,
       habits,
       habitCheckIns,
@@ -1700,6 +1771,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const index = prev.findIndex((t) => t.id === taskId);
       if (index === -1) return prev;
       setRecentlyDeleted({ task: prev[index], index });
+      setRecentlyAddedTransactions(null);
       // Clear any pending undo toast to keep a single toast slot.
       setRecentlyDeletedTransaction(null);
       setRecentlyDeletedDiary(null);
@@ -1834,6 +1906,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       ...debts.map((d) => d.id),
       ...savingsGoals.map((g) => g.id),
       ...savingsEntries.map((e) => e.id),
+      ...moneyGoals.map((g) => g.id),
       ...billTemplates.map((b) => b.id),
       ...billPayments.map((p) => p.id),
       ...goals.map((g) => g.id),
@@ -1863,6 +1936,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setFinanceCategories([]);
     setDebts([]);
     setSavingsGoals([]);
+    setMoneyGoals([]);
     setBudgetAlertState({});
     setFinanceAlerts([]);
     setBillTemplates([]);
@@ -1893,6 +1967,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       debts,
       savingsGoals,
       savingsEntries,
+      moneyGoals,
       goals,
       habits,
       habitCheckIns,
@@ -1930,6 +2005,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (present.includes('debts')) setDebts(data.debts ?? []);
     if (present.includes('savingsGoals')) setSavingsGoals(data.savingsGoals ?? []);
     if (present.includes('savingsEntries')) setSavingsEntries(data.savingsEntries ?? []);
+    if (present.includes('moneyGoals')) setMoneyGoals(data.moneyGoals ?? []);
     if (present.includes('goals')) setGoals(data.goals ?? []);
     if (present.includes('habits')) setHabits(data.habits ?? []);
     if (present.includes('habitCheckIns')) setHabitCheckIns(data.habitCheckIns ?? []);
@@ -1984,6 +2060,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       debts,
       savingsGoals,
       savingsEntries,
+      moneyGoals,
       goals,
       habits,
       habitCheckIns,
@@ -2324,6 +2401,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const index = prev.findIndex((entry) => entry.id === id);
       if (index === -1) return prev;
       setRecentlyDeletedDiary({ entry: prev[index], index });
+      setRecentlyAddedTransactions(null);
       setRecentlyDeleted(null);
       setRecentlyDeletedTransaction(null);
       return prev.filter((entry) => entry.id !== id);
@@ -2521,7 +2599,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const base = 'message' in question && question.message ? `${question.message} ` : '';
       Object.assign(question, { message: `${base}${linkNote}` });
     }
-    if (!(await showConfirm({ ...question, tone: 'danger', confirmLabel: 'Delete' }))) return;
+    // A plain entry is deleted at once with an Undo toast; ask only when more than it changes.
+    const needsConfirm = hasLinkedFee || isRecurring || Boolean(linkNote);
+    if (needsConfirm && !(await showConfirm({ ...question, tone: 'danger', confirmLabel: 'Delete' }))) return;
 
     // Recompute from the latest list: a sync may have changed it while the dialog was open.
     const latest = transactionsRef.current;
@@ -2544,6 +2624,36 @@ export default function App({ skipInitialLock = false }: AppProps) {
     // Clear any pending undo toast to keep a single toast slot.
     setRecentlyDeleted(null);
     setRecentlyDeletedDiary(null);
+    setRecentlyAddedTransactions(null);
+  };
+
+  /** Removes entries a one-tap add just saved (no confirm): tombstones, cascades and unlinks. */
+  const handleUndoAddTransactions = () => {
+    const added = recentlyAddedTransactions;
+    setRecentlyAddedTransactions(null);
+    if (!added) return;
+    const latest = transactionsRef.current;
+    const removedIds = [...new Set<string>(added.ids.flatMap((id) => (latest.some((t) => t.id === id) ? idsRemovedByCascade(latest, id) : [])))];
+    if (!removedIds.length) return;
+    markDeleted(storageKeys, removedIds);
+    setTransactions((prev) => prev.filter((t) => !removedIds.includes(t.id)));
+    const stamp = new Date().toISOString();
+    setBillPayments((prev) => {
+      const linked = unlinkDeletedTransactions(removedIds, prev, [], stamp);
+      return linked.changed ? linked.billPayments : prev;
+    });
+    setDebts((prev) => {
+      const linked = unlinkDeletedTransactions(removedIds, [], prev, stamp);
+      return linked.changed ? linked.debts : prev;
+    });
+  };
+
+  /** Shows the "Added … · Undo" toast in the single toast slot. */
+  const announceAdded = (ids: string[], message: string) => {
+    setRecentlyDeleted(null);
+    setRecentlyDeletedDiary(null);
+    setRecentlyDeletedTransaction(null);
+    setRecentlyAddedTransactions({ ids, message });
   };
 
   const handleUndoDeleteTransaction = () => {
@@ -2552,9 +2662,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
       storageKeys,
       recentlyDeletedTransaction.txs.map((t) => t.id)
     );
-    const restored = recentlyDeletedTransaction.txs;
-    setTransactions((prev) => upsertTransactions(prev, restored));
+    // Restamp: the delete may already have synced, and the newer save must win the merge.
     const stamp = new Date().toISOString();
+    const restored = recentlyDeletedTransaction.txs.map((t) => ({ ...t, updatedAt: stamp }));
+    setTransactions((prev) => upsertTransactions(prev, restored));
     setBillPayments((prev) => {
       const linked = relinkRestoredTransactions(restored, prev, [], stamp);
       return linked.changed ? linked.billPayments : prev;
@@ -2566,23 +2677,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setRecentlyDeletedTransaction(null);
   };
 
+  /** Budgets carry over (lib/budgetCarry.ts): 0 removes; a past month's edit pins the next month. */
   const handleSetBudget = (month: string, limit: number) => {
     const now = new Date().toISOString();
-    setBudgets((prev) => {
-      const existing = prev.find((b) => b.month === month);
-      if (existing) {
-        return prev.map((b) => (b.month === month ? { ...b, limit, updatedAt: now } : b));
-      }
-      return [
-        ...prev,
-        {
-          id: `budget-${month}`,
-          month,
-          limit,
-          updatedAt: now,
-        },
-      ];
-    });
+    setBudgets((prev) => setMonthlyBudget(prev, month, limit, currentMonthKey(), now));
   };
 
   const handleAddFinanceCategory = (kind: 'income' | 'expense', raw: string): string | null => {
@@ -2635,35 +2733,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
 
   const handleSetCategoryBudget = (month: string, category: string, limit: number) => {
     const now = new Date().toISOString();
-    setCategoryBudgets((prev) => {
-      const existing = prev.find((b) => b.month === month && b.category === category);
-      if (existing) {
-        return prev.map((b) =>
-          b.month === month && b.category === category ? { ...b, limit, updatedAt: now } : b
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: `cbudget-${month}-${category}`,
-          month,
-          category,
-          limit,
-          updatedAt: now,
-        },
-      ];
-    });
+    setCategoryBudgets((prev) => setCategoryBudget(prev, month, category, limit, currentMonthKey(), now));
   };
 
+  /** Budgets carry over, so removing one stores "no budget" (0) from this month on. */
   const handleRemoveCategoryBudget = (month: string, category: string) => {
-    setCategoryBudgets((prev) => {
-      const removed = prev.filter((b) => b.month === month && b.category === category);
-      markDeleted(
-        storageKeys,
-        removed.map((b) => b.id)
-      );
-      return prev.filter((b) => !(b.month === month && b.category === category));
-    });
+    handleSetCategoryBudget(month, category, 0);
   };
 
   const handleQuickAddTransaction = (amount: number, category: string) => {
@@ -2693,6 +2768,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     const tx = buildIncomeOrExpense(draft);
     setTransactions((prev) => [tx, ...prev]);
+    announceAdded([tx.id], `Added ${formatRupees(amount)} ${category}`);
   };
 
   const openFinanceModal = (
@@ -2708,6 +2784,14 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const openAccountModal = (account?: Account | null) => {
     setEditingAccount(account || null);
     setIsAccountModalOpen(true);
+  };
+
+  /** Picks a bank as kept for future savings (off the Money ledger), or puts it back. */
+  const handleSetSavingsOnly = (accountId: string, savingsOnly: boolean) => {
+    const now = new Date().toISOString();
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === accountId && Boolean(a.savingsOnly) !== savingsOnly ? { ...a, savingsOnly, updatedAt: now } : a))
+    );
   };
 
   const handleSaveAccount = async (partial: Partial<Account>): Promise<boolean> => {
@@ -2740,6 +2824,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
                 lastFourDigits: partial.lastFourDigits,
                 openingBalance: partial.openingBalance ?? a.openingBalance,
                 isArchived: partial.isArchived ?? a.isArchived,
+                creditLimit: partial.creditLimit,
+                statementDay: partial.statementDay,
+                dueDay: partial.dueDay,
                 updatedAt: now,
               }
             : a
@@ -2757,6 +2844,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       lastFourDigits: partial.lastFourDigits,
       openingBalance: partial.openingBalance ?? 0,
       isArchived: false,
+      creditLimit: partial.creditLimit,
+      statementDay: partial.statementDay,
+      dueDay: partial.dueDay,
       createdAt: now,
       updatedAt: now,
     };
@@ -2769,7 +2859,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setIsTransferModalOpen(true);
   };
 
-  const handleSaveTransfer = (draft: TransferDraft) => {
+  const handleSaveTransfer = (draft: TransferDraft, onSaved?: (records: FinanceTransaction[]) => void) => {
     const validation = validateTransfer(draft, {
       accounts,
       transactions,
@@ -2812,9 +2902,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
 
     setTransactions((prev) => upsertTransactions(prev, records));
+    onSaved?.(records);
 
     const destination = accounts.find((account) => account.id === transfer.destinationAccountId);
-    if (destination && isSavingsBucketType(destination.type)) {
+    if (destination && savingsBucketTest(accounts)(destination)) {
       const stamp = new Date().toISOString();
       setLedgerSettings((prev) => {
         if (prev[0]?.defaultSavingsAccountId === destination.id) return prev;
@@ -3023,7 +3114,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     paymentMethod?: PaymentMethod;
     accountId?: string;
   }): boolean => {
-    const accountId = entry.accountId && accounts.some((a) => a.id === entry.accountId && !a.isArchived)
+    const accountId = entry.accountId && accounts.some((a) => a.id === entry.accountId && !a.isArchived && !a.savingsOnly)
       ? entry.accountId
       : resolveDefaultAccountId(accounts, ledgerSettings[0]);
     if (!accountId) {
@@ -3052,11 +3143,100 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     const tx = buildIncomeOrExpense(draft);
     setTransactions((prev) => [tx, ...prev]);
-    void offerBillMatch(tx);
+    const addedMessage = `${entry.type === 'income' ? 'Added income' : 'Added'} ${formatRupees(entry.amount)} ${entry.note?.trim() || entry.category}`;
+    void offerBillMatch(tx).finally(() => announceAdded([tx.id], addedMessage));
     return true;
   };
 
   /** One payment split across categories: validated as one total, saved as one entry per part. */
+  /**
+   * A bill paid in full and split with friends: your share is spending, and
+   * each friend's share is money lent to them (a lent debt with its ledger entry).
+   */
+  const handleSplitWithFriends = (split: {
+    accountId: string;
+    date: string;
+    note?: string;
+    category: string;
+    paymentMethod?: PaymentMethod;
+    mine: number;
+    friends: { name: string; amount: number }[];
+  }): boolean => {
+    const friends = split.friends.filter((f) => f.name.trim() && f.amount > 0);
+    const total = [{ amount: split.mine }, ...friends].reduce(addRupees, 0);
+    const base: EntryDraft = {
+      type: 'expense',
+      amount: total,
+      accountId: split.accountId,
+      category: split.category,
+      note: split.note,
+      paymentMethod: split.paymentMethod,
+      date: split.date,
+      time: nowTimeString(),
+    };
+    // The whole bill leaves the account at once: check it as one amount.
+    const validation = validateEntry(base, ledgerContext());
+    if (isLedgerError(validation)) {
+      void showAlert(ledgerErrorDialog(validation));
+      return false;
+    }
+    const now = new Date();
+    const stamp = now.toISOString();
+    const records: FinanceTransaction[] = [];
+    if (split.mine > 0) records.push(buildIncomeOrExpense({ ...base, amount: split.mine }, { now }));
+    const newDebts: Debt[] = friends.map((friend) => {
+      const debt: Debt = {
+        id: newLedgerId('debt'),
+        direction: 'lent',
+        personName: friend.name.trim(),
+        amount: fromPaise(toPaise(friend.amount)),
+        date: split.date,
+        note: split.note,
+        paid: false,
+        accountId: split.accountId,
+        createdAt: stamp,
+        updatedAt: stamp,
+      };
+      const draft = debtOpeningDraft(debt, { accountId: split.accountId, paymentMethod: split.paymentMethod, time: base.time });
+      const tx = { ...buildIncomeOrExpense(draft, { now }), debtId: debt.id, debtRole: draft.debtRole };
+      records.push(tx);
+      return { ...debt, transactionId: tx.id };
+    });
+    setTransactions((prev) => [...records, ...prev]);
+    setDebts((prev) => [...newDebts, ...prev]);
+    void showAlert({
+      title: 'Split saved',
+      message: `${formatRupees(split.mine)} is your spending. ${friends.length === 1 ? 'Your friend owes' : `${friends.length} friends owe`} you the rest: see Debts to remind them.`,
+      tone: 'success',
+    });
+    return true;
+  };
+
+  /** Ticked bank statement rows become ledger entries on that account (Undo removes them all). */
+  const handleImportStatement = (
+    accountId: string,
+    rows: { date: string; description: string; type: 'income' | 'expense'; amount: number; category: string }[]
+  ) => {
+    if (!accounts.some((a) => a.id === accountId) || rows.length === 0) return;
+    const now = new Date();
+    const records = rows.map((row) =>
+      buildIncomeOrExpense(
+        {
+          type: row.type,
+          amount: row.amount,
+          accountId,
+          category: row.category,
+          note: row.description || undefined,
+          paymentMethod: 'bank_transfer',
+          date: row.date,
+        },
+        { now }
+      )
+    );
+    setTransactions((prev) => [...records, ...prev]);
+    announceAdded(records.map((r) => r.id), `Imported ${records.length} ${records.length === 1 ? 'entry' : 'entries'}`);
+  };
+
   const handleSplitEntry = (split: {
     accountId: string;
     date: string;
@@ -3124,8 +3304,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
   };
 
   /**
-   * Ticking "paid" on a debt linked to an account records the rest as a ledger
-   * entry (after asking); unticking removes that entry again.
+   * Ticking "paid" asks which account the rest moved through (the debt's own
+   * account listed first) and records it as a ledger entry; "Just mark paid"
+   * records nothing. Unticking removes that entry again.
    */
   const handleToggleDebtPaid = async (id: string) => {
     const debt = debts.find((d) => d.id === id);
@@ -3146,19 +3327,29 @@ export default function App({ skipInitialLock = false }: AppProps) {
     }
     const today = todayString();
     const left = debtOutstanding(debt, today);
-    const account = debt.accountId ? accounts.find((a) => a.id === debt.accountId && !a.isArchived) : undefined;
+    const owed = debt.direction === 'owed';
+    let account: Account | undefined;
     let next: Debt = { ...debt, paid: true, paidAt: stamp, updatedAt: stamp };
-    if (left > 0 && account) {
-      const owed = debt.direction === 'owed';
-      const ok = await showConfirm({
+    const open = accounts.filter((a) => !a.isArchived && !a.savingsOnly);
+    if (left > 0 && open.length) {
+      // Ask which account the money moved through (the debt's own first), or just tick it.
+      const linked = open.find((a) => a.id === debt.accountId);
+      const ordered = linked ? [linked, ...open.filter((a) => a !== linked)] : open;
+      const JUST_MARK = '__just-mark-paid';
+      const picked = await showChoice({
         title: owed
-          ? `Record ${formatRupees(left)} repaid from ${account.name}?`
-          : `Record ${formatRupees(left)} received into ${account.name}?`,
-        message: 'Adds it to the ledger and marks the debt paid. Untick later to undo.',
-        confirmLabel: 'Record and mark paid',
-        cancelLabel: 'Cancel',
+          ? `Which account repaid ${formatRupees(left)} to ${debt.personName}?`
+          : `Which account got ${formatRupees(left)} back from ${debt.personName}?`,
+        message: 'It is added to the ledger. Pick "Just mark paid" if no account was used.',
+        choices: [
+          ...ordered.map((a) => ({ value: a.id, label: a.name })),
+          { value: JUST_MARK, label: 'Just mark paid' },
+        ],
       });
-      if (!ok) return;
+      if (picked === null) return;
+      account = open.find((a) => a.id === picked);
+    }
+    if (left > 0 && account) {
       const draft = debtPaymentDraft(debt, left, today, { accountId: account.id, time: nowTimeString() });
       const validation = validateEntry(draft, ledgerContext());
       if (isLedgerError(validation)) {
@@ -3179,6 +3370,51 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const openDebtModal = (debt?: Debt | null) => {
     setEditingDebt(debt || null);
     setIsDebtModalOpen(true);
+  };
+
+  /** Adds or edits a named savings goal. */
+  const handleSaveMoneyGoal = (partial: Partial<MoneyGoal>) => {
+    const now = new Date().toISOString();
+    const name = (partial.name ?? '').trim();
+    if (!name || !(Number(partial.target) > 0)) return false;
+    setMoneyGoals((prev) => {
+      const existing = partial.id ? prev.find((g) => g.id === partial.id) : undefined;
+      if (existing) {
+        return prev.map((g) =>
+          g.id === existing.id
+            ? {
+                ...g,
+                name,
+                target: Number(partial.target),
+                targetDate: partial.targetDate || undefined,
+                accountId: partial.accountId || undefined,
+                savedAmount: partial.accountId ? undefined : partial.savedAmount,
+                archived: partial.archived ?? g.archived,
+                updatedAt: now,
+              }
+            : g
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: newLedgerId('mgoal'),
+          name,
+          target: Number(partial.target),
+          targetDate: partial.targetDate || undefined,
+          accountId: partial.accountId || undefined,
+          savedAmount: partial.accountId ? undefined : partial.savedAmount,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+    });
+    return true;
+  };
+
+  const handleDeleteMoneyGoal = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    setMoneyGoals((prev) => prev.filter((g) => g.id !== id));
   };
 
   // Savings goal handler
@@ -3460,14 +3696,19 @@ export default function App({ skipInitialLock = false }: AppProps) {
       openSavingsModalWithAmount(amount);
       return;
     }
-    handleSaveTransfer({
-      amount,
-      fromAccountId,
-      toAccountId,
-      date: todayString(),
-      time: nowTimeString(),
-      note: 'Quick add',
-    });
+    const fromName = accounts.find((a) => a.id === fromAccountId)?.name ?? 'account';
+    const toName = accounts.find((a) => a.id === toAccountId)?.name ?? 'savings';
+    handleSaveTransfer(
+      {
+        amount,
+        fromAccountId,
+        toAccountId,
+        date: todayString(),
+        time: nowTimeString(),
+        note: 'Quick add',
+      },
+      (records) => announceAdded(records.map((r) => r.id), `Moved ${formatRupees(amount)} ${fromName} → ${toName}`)
+    );
   };
 
   // Budget alert effect: check thresholds when transactions/budgets change.
@@ -3475,7 +3716,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   useEffect(() => {
     const currentMonth = currentMonthKey();
     const { alerts, stateUpdates } = checkBudgetAlerts({
-      transactions,
+      transactions: ledgerTransactions(transactions, accounts),
       budgets,
       categoryBudgets,
       alertState: budgetAlertState,
@@ -3513,7 +3754,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, budgets, categoryBudgets]);
+  }, [transactions, accounts, budgets, categoryBudgets]);
 
   // Materialize bill payments when templates change (e.g. new template added).
   useEffect(() => {
@@ -4192,6 +4433,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         {/* PERSONAL FINANCE VIEW */}
         {activeTab === 'finance' && (
           <FinanceView
+            requestedSection={requestedMoneySection}
             transactions={transactions}
             budgets={budgets}
             categoryBudgets={categoryBudgets}
@@ -4200,6 +4442,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onDeleteFinanceCategory={handleDeleteFinanceCategory}
             debts={debts}
             savingsGoals={savingsGoals}
+            moneyGoals={moneyGoals}
+            onSaveMoneyGoal={handleSaveMoneyGoal}
+            onDeleteMoneyGoal={handleDeleteMoneyGoal}
             billTemplates={billTemplates}
             billPayments={billPayments}
             financeAlerts={financeAlerts}
@@ -4221,6 +4466,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
               onDeleteTransaction: handleDeleteTransaction,
               onUpdateLedgerSettings: handleUpdateLedgerSettings,
               onBulkAssignAccount: handleBulkAssignAccount,
+              onImportStatement: handleImportStatement,
             }}
             onAddTransaction={() => openFinanceModal(null)}
             onEditTransaction={(tx) => openFinanceModal(tx)}
@@ -4246,12 +4492,14 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onEditSavingsTransfer={openSavingsTransferModal}
             onDeleteSavings={handleDeleteSavingsEntry}
             onQuickAddSavings={handleQuickAddSavings}
+            onSetSavingsOnly={handleSetSavingsOnly}
             onDismissAlert={handleDismissAlert}
             onConfirmBankSms={(partial) =>
               handleSaveTransaction(partial, { allowOverdraft: true }) === true
             }
             onQuickEntry={handleQuickEntry}
             onSplitEntry={handleSplitEntry}
+            onSplitWithFriends={handleSplitWithFriends}
             onAddDebtPayment={handleAddDebtPayment}
             onPayBill={handlePayBill}
           />
@@ -4374,7 +4622,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         onSave={handleSaveDebt}
         initialDebt={editingDebt}
         selectedDate={selectedDate}
-        accounts={accounts.filter((account) => !account.isArchived)}
+        accounts={accounts.filter((account) => !account.isArchived && !account.savingsOnly)}
         defaultAccountId={resolveDefaultAccountId(accounts, ledgerSettings[0]) ?? undefined}
       />
 
@@ -4478,6 +4726,15 @@ export default function App({ skipInitialLock = false }: AppProps) {
           }).format(recentlyDeletedTransaction.txs[0]?.amount ?? 0)} deleted`}
           onUndo={handleUndoDeleteTransaction}
           onDismiss={() => setRecentlyDeletedTransaction(null)}
+        />
+      )}
+
+      {/* Undo Toast for one-tap adds (quick entry, repeat chips, savings chips) */}
+      {recentlyAddedTransactions && (
+        <Toast
+          message={recentlyAddedTransactions.message}
+          onUndo={handleUndoAddTransactions}
+          onDismiss={() => setRecentlyAddedTransactions(null)}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { countsAsIncome, countsAsSpending } from '../lib/moneyLinks';
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Wallet,
   Plus,
@@ -36,6 +36,7 @@ import {
   PaymentMethod,
   SavingsEntry,
   SavingsGoal,
+  MoneyGoal,
   SavingsStreakState,
 } from '../types';
 import {
@@ -74,7 +75,15 @@ import {
   getMonthlySavedDays,
   heatmapIntensity,
 } from '../lib/savingsStreak';
-import { bucketAccounts, countedSavingsAmounts, savingsRowsForMonth } from '../lib/savingsLedger';
+import { bucketAccounts, countedSavingsAmounts, ledgerTransactions, savingsOnlyCandidates, savingsRowsForMonth } from '../lib/savingsLedger';
+import { showAlert, showChoice } from './ui/AppDialog';
+import { reminderMessage } from '../lib/friendSplit';
+import type { FriendSplitInput } from './money/SplitEntryModal';
+import { AccountDetailView } from './ledger/AccountDetailView';
+import { TransactionDetailModal } from './ledger/TransactionDetailModal';
+import { MoneyGoalModal } from './money/MoneyGoalModal';
+import { goalProgress, sortGoals } from '../lib/moneyGoals';
+import { effectiveCategoryBudgets, effectiveMonthlyBudget, isCarriedOver } from '../lib/budgetCarry';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
@@ -98,6 +107,10 @@ interface FinanceViewProps {
   onDeleteFinanceCategory: (kind: 'income' | 'expense', name: string) => void;
   debts: Debt[];
   savingsGoals: SavingsGoal[];
+  /** Named savings goals, shown on the Savings page. */
+  moneyGoals: MoneyGoal[];
+  onSaveMoneyGoal: (goal: Partial<MoneyGoal>) => boolean;
+  onDeleteMoneyGoal: (id: string) => void;
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   savingsEntries: SavingsEntry[];
@@ -128,6 +141,10 @@ interface FinanceViewProps {
   onEditSavingsTransfer: (tx: FinanceTransaction) => void;
   onDeleteSavings: (id: string) => void;
   onQuickAddSavings: (amount: number) => void;
+  /** Set when a money reminder was tapped: opens that section (`at` makes each tap new). */
+  requestedSection?: { section: 'bills' | 'debts' | 'ledger'; at: number } | null;
+  /** Picks (or unpicks) a bank as kept for future savings. */
+  onSetSavingsOnly: (accountId: string, savingsOnly: boolean) => void;
   onDismissAlert: (key: string) => void;
   /** Saves a confirmed bank SMS as a normal ledger entry. False keeps it pending. */
   onConfirmBankSms: (partial: Partial<FinanceTransaction>) => boolean;
@@ -135,12 +152,27 @@ interface FinanceViewProps {
   onQuickEntry: (entry: QuickEntry) => boolean;
   /** One payment split across categories. */
   onSplitEntry: (split: { accountId: string; date: string; note?: string; paymentMethod?: PaymentMethod; lines: SplitLine[] }) => boolean;
+  /** A bill split with friends: your share is spending, theirs become lent debts. */
+  onSplitWithFriends: (split: FriendSplitInput) => boolean;
   onAddDebtPayment: (id: string, amount: number, date: string, ledger?: { accountId: string }) => boolean;
   /** Pays a bill with the chosen amount, account and date (a linked ledger entry). */
   onPayBill: (payment: BillPayment, details: { amount: number; accountId: string; date: string; paymentMethod?: PaymentMethod }) => boolean;
 }
 
 type FinanceMode = 'ledger' | 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings' | 'reports';
+
+const MONEY_TAB_KEY = 'dayflow_money_tab_v1';
+
+const MONEY_TABS: { mode: FinanceMode; label: string; icon: React.ElementType }[] = [
+  { mode: 'ledger', label: 'Ledger', icon: Wallet },
+  { mode: 'daily', label: 'Daily', icon: Calendar },
+  { mode: 'weekly', label: '7 days', icon: TrendingUp },
+  { mode: 'monthly', label: 'Monthly', icon: PieChart },
+  { mode: 'bills', label: 'Bills', icon: Receipt },
+  { mode: 'debts', label: 'Debts', icon: Wallet },
+  { mode: 'savings', label: 'Savings', icon: PiggyBank },
+  { mode: 'reports', label: 'Reports', icon: BarChart3 },
+];
 type FilterType = 'all' | 'expense' | 'income';
 type FilterPayment = 'all' | PaymentMethod;
 type DebtFilter = 'all' | 'outstanding' | 'settled';
@@ -181,7 +213,8 @@ const paymentEmoji = (m?: PaymentMethod) =>
   m ? ALL_PAYMENT_METHODS.find((p) => p.value === m)?.emoji || '' : '';
 
 export const FinanceView: React.FC<FinanceViewProps> = ({
-  transactions,
+  requestedSection,
+  transactions: allTransactions,
   budgets,
   categoryBudgets,
   financeCategories,
@@ -189,6 +222,9 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onDeleteFinanceCategory,
   debts,
   savingsGoals,
+  moneyGoals,
+  onSaveMoneyGoal,
+  onDeleteMoneyGoal,
   billTemplates,
   billPayments,
   savingsEntries,
@@ -219,14 +255,100 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onEditSavingsTransfer,
   onDeleteSavings,
   onQuickAddSavings,
+  onSetSavingsOnly,
   onDismissAlert,
   onConfirmBankSms,
   onQuickEntry,
   onSplitEntry,
+  onSplitWithFriends,
   onAddDebtPayment,
   onPayBill,
 }) => {
-  const [mode, setMode] = useState<FinanceMode>('ledger');
+  // The last section opened is remembered on this device (a view preference, not synced).
+  const [mode, setMode] = useState<FinanceMode>(() => {
+    try {
+      const saved = localStorage.getItem(MONEY_TAB_KEY);
+      return MONEY_TABS.some((tab) => tab.mode === saved) ? (saved as FinanceMode) : 'ledger';
+    } catch {
+      return 'ledger';
+    }
+  });
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  const selectMode = (next: FinanceMode) => {
+    setMode(next);
+    setSavingsDetailId(null);
+    if (next === 'monthly' || next === 'savings') setSelectedMonth(toMonthKey(selectedDate));
+    try {
+      localStorage.setItem(MONEY_TAB_KEY, next);
+    } catch {
+      // Private mode or blocked storage: the tab just is not remembered.
+    }
+  };
+  // A tapped money reminder opens its section.
+  useEffect(() => {
+    if (requestedSection) selectMode(requestedSection.section);
+    // selectMode is recreated each render; the request object is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedSection]);
+  // Keep the open section visible in the strip (on a phone most of it is off-screen).
+  useEffect(() => {
+    const strip = tabStripRef.current;
+    const active = strip?.querySelector<HTMLElement>('[data-active]');
+    if (!strip || !active) return;
+    strip.scrollTo({ left: active.offsetLeft - strip.clientWidth / 2 + active.offsetWidth / 2 });
+  }, [mode]);
+  const [savingsDetailId, setSavingsDetailId] = useState<string | null>(null);
+  // Savings-only banks live on the Savings page: their own entries stay out of the
+  // spending views, the forecast and the reports (Savings and net worth use all).
+  const transactions = useMemo(
+    () => ledgerTransactions(allTransactions, ledger.accounts),
+    [allTransactions, ledger.accounts]
+  );
+  const [savingsDetailTx, setSavingsDetailTx] = useState<FinanceTransaction | null>(null);
+  // Goal form: null = closed, 'new' = adding, a goal = editing it.
+  const [goalForm, setGoalForm] = useState<MoneyGoal | 'new' | null>(null);
+
+  /** "Pay me back": WhatsApp, the share sheet, or copy, with a UPI link when a UPI ID is set. */
+  const remindFriend = async (debt: Debt) => {
+    const settings = ledger.ledgerSettings[0];
+    const message = reminderMessage({
+      personName: debt.personName,
+      amount: debtOutstanding(debt, todayString()),
+      note: debt.note,
+      upiId: settings?.upiId,
+      payeeName: settings?.upiName,
+    });
+    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    const pick = await showChoice({
+      title: `Remind ${debt.personName}`,
+      message: settings?.upiId ? undefined : 'Add your UPI ID in Split with friends to include a pay link.',
+      choices: [
+        { value: 'whatsapp', label: 'WhatsApp' },
+        ...(canShare ? [{ value: 'share', label: 'Share…' }] : []),
+        { value: 'copy', label: 'Copy message' },
+      ],
+    });
+    if (pick === 'whatsapp') {
+      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+    } else if (pick === 'share') {
+      try {
+        await navigator.share({ text: message });
+      } catch {
+        // Closed the share sheet: nothing to do.
+      }
+    } else if (pick === 'copy') {
+      try {
+        await navigator.clipboard.writeText(message);
+        void showAlert({ title: 'Message copied', message: 'Paste it in any chat.', tone: 'success' });
+      } catch {
+        void showAlert({ title: 'Could not copy', message, tone: 'warning' });
+      }
+    }
+  };
+  const [detailTx, setDetailTx] = useState<FinanceTransaction | null>(null);
+  // A transfer opens the transfer editor; the entry form would save it as an expense.
+  const editAnyTransaction = (tx: FinanceTransaction) =>
+    tx.type === 'transfer' ? ledger.onEditTransfer(tx) : onEditTransaction(tx);
   const [isSplitOpen, setIsSplitOpen] = useState(false);
   const [payingBill, setPayingBill] = useState<BillPayment | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => toMonthKey(selectedDate));
@@ -300,14 +422,14 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       .sort((a, b) => b.amount - a.amount);
   }, [monthlyTx]);
 
-  const currentBudget = budgets.find((b) => b.month === selectedMonth);
+  const currentBudget = effectiveMonthlyBudget(budgets, selectedMonth);
   const budgetLimit = currentBudget?.limit ?? 0;
   const budgetUsedPct =
     budgetLimit > 0 ? Math.min(100, Math.round((monthlyExpense / budgetLimit) * 100)) : 0;
   const budgetRemaining = budgetLimit - monthlyExpense;
 
   const monthCategoryBudgets = useMemo(
-    () => categoryBudgets.filter((b) => b.month === selectedMonth),
+    () => effectiveCategoryBudgets(categoryBudgets, selectedMonth),
     [categoryBudgets, selectedMonth]
   );
 
@@ -341,7 +463,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     [financeCategories]
   );
   const spendableAccounts = useMemo(
-    () => ledger.accounts.filter((account) => !account.isArchived),
+    () => ledger.accounts.filter((account) => !account.isArchived && !account.savingsOnly),
     [ledger.accounts]
   );
   const defaultAccountId = resolveDefaultAccountId(ledger.accounts, ledger.ledgerSettings[0]) ?? undefined;
@@ -356,7 +478,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         accounts: ledger.accounts,
         billTemplates,
         billPayments,
-        budget: budgets.find((b) => b.month === outlookToday.slice(0, 7))?.limit ?? null,
+        budget: effectiveMonthlyBudget(budgets, outlookToday.slice(0, 7))?.limit ?? null,
       }),
     [outlookToday, transactions, ledger.accounts, billTemplates, billPayments, budgets]
   );
@@ -451,10 +573,6 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
   const currentSavingsGoal = savingsGoals.find((g) => g.month === selectedMonth);
   const savingsTarget = currentSavingsGoal?.target ?? 0;
-  const savingsProgress = useMemo(
-    () => getSavingsProgress(monthlyNet, savingsTarget),
-    [monthlyNet, savingsTarget]
-  );
 
   const handleSaveSavingsGoal = () => {
     const parsed = parseFloat(savingsInput);
@@ -523,8 +641,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   // Savings: new money into savings, gold, or stocks, plus older unlinked logs.
   const savingsToday = todayString();
   const countedSavings = useMemo(
-    () => countedSavingsAmounts(savingsEntries, transactions, ledger.accounts),
-    [savingsEntries, transactions, ledger.accounts]
+    () => countedSavingsAmounts(savingsEntries, allTransactions, ledger.accounts),
+    [savingsEntries, allTransactions, ledger.accounts]
   );
   const savingsHeatmap = useMemo(
     () => getLastNDaysHeatmap(countedSavings, 30),
@@ -538,21 +656,30 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     () => getMonthlySavingsTotal(countedSavings, selectedMonth),
     [countedSavings, selectedMonth]
   );
+  // The savings goal counts money moved into savings this month, as the Savings page does.
+  const savingsProgress = useMemo(
+    () => getSavingsProgress(monthSavingsTotal, savingsTarget),
+    [monthSavingsTotal, savingsTarget]
+  );
   const monthSavedDays = useMemo(
     () => getMonthlySavedDays(countedSavings, selectedMonth),
     [countedSavings, selectedMonth]
   );
   const monthSavingsList = useMemo(
-    () => savingsRowsForMonth(savingsEntries, transactions, ledger.accounts, selectedMonth),
-    [savingsEntries, transactions, ledger.accounts, selectedMonth]
+    () => savingsRowsForMonth(savingsEntries, allTransactions, ledger.accounts, selectedMonth),
+    [savingsEntries, allTransactions, ledger.accounts, selectedMonth]
   );
   const bucketBalances = useMemo(() => {
-    const balances = computeAccountBalances(ledger.accounts, transactions);
+    const balances = computeAccountBalances(ledger.accounts, allTransactions);
     return bucketAccounts(ledger.accounts).map((account) => ({
       account,
       paise: balances.get(account.id) || 0,
     }));
-  }, [ledger.accounts, transactions]);
+  }, [ledger.accounts, allTransactions]);
+  const savingsCandidates = useMemo(() => savingsOnlyCandidates(ledger.accounts), [ledger.accounts]);
+  const savingsDetailAccount = savingsDetailId
+    ? ledger.accounts.find((account) => account.id === savingsDetailId) ?? null
+    : null;
   const daysInMonth = new Date(
     parseInt(selectedMonth.slice(0, 4)),
     parseInt(selectedMonth.slice(5, 7)),
@@ -613,6 +740,28 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       {spendableAccounts.length > 0 && (mode === 'ledger' || mode === 'daily' || mode === 'monthly') && (
         <MonthOutlook forecast={forecast} />
       )}
+      <MoneyGoalModal
+        isOpen={goalForm !== null}
+        goal={goalForm === 'new' ? null : goalForm}
+        accounts={[...bucketAccounts(ledger.accounts)].sort((a, b) => Number(Boolean(b.savingsOnly)) - Number(Boolean(a.savingsOnly)))}
+        onClose={() => setGoalForm(null)}
+        onSave={onSaveMoneyGoal}
+        onDelete={onDeleteMoneyGoal}
+      />
+      <TransactionDetailModal
+        tx={savingsDetailTx}
+        accounts={ledger.accounts}
+        onClose={() => setSavingsDetailTx(null)}
+        onEdit={onEditSavingsTransfer}
+        onDelete={onDeleteTransaction}
+      />
+      <TransactionDetailModal
+        tx={detailTx}
+        accounts={ledger.accounts}
+        onClose={() => setDetailTx(null)}
+        onEdit={editAnyTransaction}
+        onDelete={onDeleteTransaction}
+      />
       <BillPayModal
         payment={payingBill}
         template={payingBill ? billTemplates.find((bill) => bill.id === payingBill.billId) : undefined}
@@ -629,121 +778,47 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         today={outlookToday}
         onClose={() => setIsSplitOpen(false)}
         onSave={onSplitEntry}
+        onSaveWithFriends={onSplitWithFriends}
+        upiId={ledger.ledgerSettings[0]?.upiId}
+        onSaveUpiId={(upiId) => ledger.onUpdateLedgerSettings({ upiId })}
       />
 
       {/* Ledger / Daily / Weekly / Monthly / Bills / Debts / Savings + Filters */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 max-w-full overflow-x-auto no-scrollbar">
-          <button
-            onClick={() => setMode('ledger')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${
-              mode === 'ledger'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
+        <div className="relative max-w-full">
+          <div
+            ref={tabStripRef}
+            role="tablist"
+            aria-label="Money sections"
+            className="flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 max-w-full overflow-x-auto no-scrollbar"
           >
-            <span className="inline-flex items-center gap-1.5">
-              <Wallet className="w-3.5 h-3.5" />
-              Ledger
-            </span>
-          </button>
-          <button
-            onClick={() => setMode('daily')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${
-              mode === 'daily'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5" />
-              Daily
-            </span>
-          </button>
-          <button
-            onClick={() => setMode('weekly')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-              mode === 'weekly'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <TrendingUp className="w-3.5 h-3.5" />
-              Week
-            </span>
-          </button>
-          <button
-            onClick={() => {
-              setMode('monthly');
-              setSelectedMonth(toMonthKey(selectedDate));
-            }}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-              mode === 'monthly'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <PieChart className="w-3.5 h-3.5" />
-              Monthly
-            </span>
-          </button>
-          <button
-            onClick={() => setMode('bills')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-              mode === 'bills'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Receipt className="w-3.5 h-3.5" />
-              Bills
-            </span>
-          </button>
-          <button
-            onClick={() => setMode('debts')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-              mode === 'debts'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Wallet className="w-3.5 h-3.5" />
-              Debts
-            </span>
-          </button>
-          <button
-            onClick={() => {
-              setMode('savings');
-              setSelectedMonth(toMonthKey(selectedDate));
-            }}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-              mode === 'savings'
-                ? 'bg-white dark:bg-slate-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <PiggyBank className="w-3.5 h-3.5" />
-              Savings
-            </span>
-          </button>
-          <button
-            onClick={() => setMode('reports')}
-            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${
-              mode === 'reports'
-                ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <BarChart3 className="w-3.5 h-3.5" />
-              Reports
-            </span>
-          </button>
+            {MONEY_TABS.map(({ mode: tab, label, icon: Icon }) => {
+              const active = mode === tab;
+              return (
+                <button
+                  key={tab}
+                  role="tab"
+                  aria-selected={active}
+                  data-active={active || undefined}
+                  onClick={() => selectMode(tab)}
+                  className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors shrink-0 ${
+                    active
+                      ? `bg-white dark:bg-slate-700 shadow-sm ${
+                          tab === 'savings' ? 'text-emerald-700 dark:text-emerald-300' : 'text-indigo-700 dark:text-indigo-300'
+                        }`
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Icon className="w-3.5 h-3.5" />
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Fade at the right edge says the strip scrolls. */}
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 rounded-r-xl bg-gradient-to-l from-slate-100 dark:from-slate-800 to-transparent sm:hidden" aria-hidden="true" />
         </div>
 
         {mode !== 'debts' && mode !== 'bills' && mode !== 'savings' && mode !== 'ledger' && mode !== 'reports' && (
@@ -836,6 +911,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       {mode === 'reports' && (
         <MoneyReports
           transactions={transactions}
+          allTransactions={allTransactions}
           accounts={ledger.accounts}
           debts={debts}
           billPayments={billPayments}
@@ -867,7 +943,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </Card>
             <Card className="p-3 sm:p-4">
               <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                vs Prev Week
+                vs previous 7 days
               </div>
               <p
                 className={`text-base sm:text-xl font-black truncate ${
@@ -950,8 +1026,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                         destinationName={
                           ledger.accounts.find((a) => a.id === tx.destinationAccountId)?.name
                         }
-                        onEdit={onEditTransaction}
-                        onDelete={onDeleteTransaction}
+                        onOpen={setDetailTx}
                       />
                     ))}
                   </div>
@@ -1022,7 +1097,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </Card>
             <Card className="p-3 sm:p-4">
               <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                Net
+                Left over
               </div>
               <p
                 className={`text-base sm:text-xl font-black truncate ${
@@ -1089,8 +1164,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   destinationName={
                     ledger.accounts.find((a) => a.id === tx.destinationAccountId)?.name
                   }
-                  onEdit={onEditTransaction}
-                  onDelete={onDeleteTransaction}
+                  onOpen={setDetailTx}
                 />
               ))}
             </div>
@@ -1164,7 +1238,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               </p>
             </Card>
             <Card className="p-4">
-              <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Net</div>
+              <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Left over</div>
               <p
                 className={`text-xl font-black ${
                   monthlyNet >= 0
@@ -1331,7 +1405,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               <>
                 <div className="flex items-end justify-between text-sm">
                   <span className="text-slate-600 dark:text-slate-400">
-                    {formatMoney(savingsProgress.saved)} of {formatMoney(savingsTarget)}
+                    {formatMoney(savingsProgress.saved)} moved to savings of {formatMoney(savingsTarget)}
                   </span>
                   {savingsProgress.met ? (
                     <span className="font-bold text-emerald-600 dark:text-emerald-400">
@@ -1356,7 +1430,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               </>
             ) : (
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Set a monthly savings target to track how much you're saving (income minus expenses).
+                Set a monthly target for money you move into savings.
               </p>
             )}
           </Card>
@@ -1367,6 +1441,11 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 Monthly Budget
+                {isCarriedOver(currentBudget, selectedMonth) && currentBudget && (
+                  <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                    · from {new Date(`${currentBudget.month}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}
+                  </span>
+                )}
               </h3>
               {!isEditingBudget && (
                 <button
@@ -1406,6 +1485,18 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   >
                     Cancel
                   </Button>
+                  {budgetLimit > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        onSetBudget(selectedMonth, 0);
+                        setIsEditingBudget(false);
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  )}
                 </div>
               </div>
             ) : budgetLimit > 0 ? (
@@ -1610,8 +1701,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   destinationName={
                     ledger.accounts.find((a) => a.id === tx.destinationAccountId)?.name
                   }
-                  onEdit={onEditTransaction}
-                  onDelete={onDeleteTransaction}
+                  onOpen={setDetailTx}
                 />
               ))}
             </div>
@@ -1942,7 +2032,23 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       )}
 
       {/* ============ SAVINGS VIEW ============ */}
-      {mode === 'savings' && (
+      {mode === 'savings' && savingsDetailAccount && (
+        <AccountDetailView
+          account={savingsDetailAccount}
+          accounts={ledger.accounts}
+          transactions={allTransactions}
+          financeCategories={ledger.financeCategories}
+          onBack={() => setSavingsDetailId(null)}
+          onEditAccount={ledger.onEditAccount}
+          onAddIncome={(id) => ledger.onAddIncome(id)}
+          onAddExpense={(id) => ledger.onAddExpense(id)}
+          onEditTransaction={ledger.onEditTransaction}
+          onEditTransfer={ledger.onEditTransfer}
+          onDeleteTransaction={ledger.onDeleteTransaction}
+        />
+      )}
+
+      {mode === 'savings' && !savingsDetailAccount && (
         <>
           <div className="flex items-center justify-between gap-2">
             <div>
@@ -2006,15 +2112,23 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               {bucketBalances.map(({ account, paise }) => {
                 const meta = accountTypeMeta(account.type);
                 return (
-                  <Card key={account.id} className="p-3 sm:p-4">
-                    <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 truncate">
-                      {meta.emoji} {meta.label}
-                    </div>
-                    <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{account.name}</p>
-                    <p className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 truncate">
-                      {formatPaise(paise)}
-                    </p>
-                  </Card>
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => setSavingsDetailId(account.id)}
+                    className="text-left rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                    aria-label={`Open ${account.name} history`}
+                  >
+                    <Card className="p-3 sm:p-4 h-full hover:border-emerald-300 dark:hover:border-emerald-800 transition-colors">
+                      <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 truncate">
+                        {meta.emoji} {account.savingsOnly ? 'Future savings' : meta.label}
+                      </div>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{account.name}</p>
+                      <p className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 truncate">
+                        {formatPaise(paise)}
+                      </p>
+                    </Card>
+                  </button>
                 );
               })}
             </div>
@@ -2023,6 +2137,98 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Add a savings, gold or stocks account in the ledger first.
               </p>
+            </Card>
+          )}
+
+          {/* Named goals */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300">Goals</h4>
+              <button
+                type="button"
+                onClick={() => setGoalForm('new')}
+                className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+              >
+                + Add goal
+              </button>
+            </div>
+            {moneyGoals.length === 0 ? (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Name what you are saving for, like an emergency fund.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {sortGoals(moneyGoals).map((goal) => {
+                  const p = goalProgress(goal, ledger.accounts, allTransactions, savingsToday);
+                  const by = goal.targetDate
+                    ? new Date(`${goal.targetDate}T00:00:00`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+                    : null;
+                  return (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      onClick={() => setGoalForm(goal)}
+                      className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2.5 hover:border-emerald-300 dark:hover:border-emerald-800"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white truncate">{goal.name}</span>
+                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 shrink-0">{p.percent}%</span>
+                      </div>
+                      <div className="h-2 mt-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.max(2, p.percent)}%` }} />
+                      </div>
+                      <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {formatMoney(p.saved)} of {formatMoney(p.target)}
+                        {p.done
+                          ? ' · reached'
+                          : p.late
+                            ? ` · date passed, ${formatMoney(p.left)} to go`
+                            : p.perMonth != null && by
+                              ? ` · ${formatMoney(p.perMonth)}/month to reach it by ${by}`
+                              : ` · ${formatMoney(p.left)} to go`}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+
+          {/* Banks kept for future savings */}
+          {savingsCandidates.length > 0 && (
+            <Card className="p-4">
+              <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300">Banks for future savings</h4>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Picked banks leave the Money ledger and show only here.
+              </p>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {savingsCandidates.map((account) => {
+                  const on = Boolean(account.savingsOnly);
+                  return (
+                    <label
+                      key={account.id}
+                      className={`flex items-center gap-2.5 px-3 py-2.5 min-h-[44px] rounded-xl border cursor-pointer transition-colors ${
+                        on
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={(e) => onSetSavingsOnly(account.id, e.target.checked)}
+                        className="w-4 h-4 accent-emerald-600"
+                      />
+                      <span className="flex-1 min-w-0 text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">
+                        {account.name}
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                        {accountTypeMeta(account.type).label}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
             </Card>
           )}
 
@@ -2141,7 +2347,27 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 Savings in {monthLabel(selectedMonth)}
               </h4>
               {monthSavingsList.map((entry) => (
-                <Card key={entry.id} className="p-3 flex items-center gap-3">
+                <button
+                  key={entry.id}
+                  type="button"
+                  className="w-full text-left rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                  onClick={async () => {
+                    if (entry.kind !== 'legacy') {
+                      setSavingsDetailTx(entry.transfer);
+                      return;
+                    }
+                    const pick = await showChoice({
+                      title: `Saving of ${formatMoney(entry.amount)}`,
+                      choices: [
+                        { value: 'edit', label: 'Edit' },
+                        { value: 'delete', label: 'Delete' },
+                      ],
+                    });
+                    if (pick === 'edit') onEditSavings(entry.entry);
+                    if (pick === 'delete') onDeleteSavings(entry.id);
+                  }}
+                >
+                <Card className="p-3 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
                     <PiggyBank className="w-5 h-5" />
                   </div>
@@ -2167,29 +2393,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                       {entry.note && <span> · {entry.note}</span>}
                     </p>
                   </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <button
-                      onClick={() =>
-                        entry.kind === 'legacy'
-                          ? onEditSavings(entry.entry)
-                          : onEditSavingsTransfer(entry.transfer)
-                      }
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                      title="Edit"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() =>
-                        entry.kind === 'legacy' ? onDeleteSavings(entry.id) : onDeleteTransaction(entry.id)
-                      }
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
                 </Card>
+                </button>
               ))}
             </div>
           ) : (
@@ -2230,7 +2435,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             <Card className="p-3 sm:p-4">
               <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs font-semibold mb-1">
                 <ArrowUpRight className="w-3.5 h-3.5" />
-                Lent (out)
+                To get back
               </div>
               <p className="text-base sm:text-xl font-black text-slate-900 dark:text-white truncate">
                 {formatMoney(outstandingLent)}
@@ -2239,7 +2444,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             <Card className="p-3 sm:p-4">
               <div className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400 text-[10px] sm:text-xs font-semibold mb-1">
                 <ArrowDownRight className="w-3.5 h-3.5" />
-                Owed (out)
+                To pay
               </div>
               <p className="text-base sm:text-xl font-black text-slate-900 dark:text-white truncate">
                 {formatMoney(outstandingOwed)}
@@ -2290,6 +2495,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                     onEdit={onEditDebt}
                     onDelete={onDeleteDebt}
                     onTogglePaid={onToggleDebtPaid}
+                    onRemind={(d) => void remindFriend(d)}
                   />
                   <DebtLoanPanel debt={debt} today={today} accounts={spendableAccounts}
                     defaultAccountId={defaultAccountId} onAddPayment={onAddDebtPayment} />
@@ -2330,8 +2536,8 @@ interface TransactionRowProps {
   showDate?: boolean;
   accountName?: string;
   destinationName?: string;
-  onEdit: (tx: FinanceTransaction) => void;
-  onDelete: (id: string) => void;
+  /** Opens the details sheet, where Edit and Delete live. */
+  onOpen: (tx: FinanceTransaction) => void;
 }
 
 const TransactionRow: React.FC<TransactionRowProps> = ({
@@ -2339,12 +2545,17 @@ const TransactionRow: React.FC<TransactionRowProps> = ({
   showDate,
   accountName,
   destinationName,
-  onEdit,
-  onDelete,
+  onOpen,
 }) => {
   const isExpense = tx.type === 'expense';
   const isTransfer = tx.type === 'transfer';
   return (
+    <button
+      type="button"
+      onClick={() => onOpen(tx)}
+      className="w-full text-left rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+      aria-label={`Open ${isTransfer ? 'transfer' : tx.category} ${formatMoney(tx.amount)}`}
+    >
     <Card className="p-3 flex items-center gap-3">
       <div
         className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
@@ -2411,24 +2622,9 @@ const TransactionRow: React.FC<TransactionRowProps> = ({
           {isTransfer ? '' : isExpense ? '−' : '+'}
           {formatMoney(tx.amount)}
         </p>
-        <div className="flex items-center justify-end gap-1 mt-0.5">
-          <button
-            onClick={() => onEdit(tx)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            title="Edit"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onDelete(tx.id)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            title="Delete"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
       </div>
     </Card>
+    </button>
   );
 };
 
@@ -2459,6 +2655,8 @@ interface DebtRowProps {
   onEdit: (debt: Debt) => void;
   onDelete: (id: string) => void;
   onTogglePaid: (id: string) => void;
+  /** Lent and not paid back: send them a "pay me back" message. */
+  onRemind?: (debt: Debt) => void;
 }
 
 const DebtRow: React.FC<DebtRowProps> = ({
@@ -2466,8 +2664,11 @@ const DebtRow: React.FC<DebtRowProps> = ({
   onEdit,
   onDelete,
   onTogglePaid,
+  onRemind,
 }) => {
   const isLent = debt.direction === 'lent';
+  // Still to pay or get back (part payments and EMIs counted); a settled debt shows its full amount.
+  const left = debt.paid ? debt.amount : debtOutstanding(debt, todayString());
   return (
     <Card
       className={`p-3 flex items-center gap-3 transition-opacity ${
@@ -2514,6 +2715,15 @@ const DebtRow: React.FC<DebtRowProps> = ({
           )}
           {debt.note && <span> · {debt.note}</span>}
         </p>
+        {isLent && !debt.paid && onRemind && (
+          <button
+            type="button"
+            onClick={() => onRemind(debt)}
+            className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300"
+          >
+            Remind to pay
+          </button>
+        )}
       </div>
       <div className="text-right shrink-0 flex items-center gap-1">
         <p
@@ -2523,7 +2733,12 @@ const DebtRow: React.FC<DebtRowProps> = ({
               : 'text-rose-600 dark:text-rose-400'
           }`}
         >
-          {formatMoney(debt.amount)}
+          {formatMoney(left)}
+          {!debt.paid && toPaise(left) !== toPaise(debt.amount) && (
+            <span className="block text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+              of {formatMoney(debt.amount)}
+            </span>
+          )}
         </p>
         <div className="flex items-center gap-0.5">
           <button

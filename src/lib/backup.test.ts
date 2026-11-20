@@ -29,6 +29,7 @@ const emptyCollections = (): BackupCollections => ({
   diaryEntries: [],
   focusSessions: [],
   maintenanceItems: [],
+  moneyGoals: [],
   billTemplates: [],
   billPayments: [],
   settings: DEFAULT_SETTINGS,

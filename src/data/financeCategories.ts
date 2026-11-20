@@ -1,3 +1,4 @@
+import { effectiveCategoryLimit } from '../lib/budgetCarry';
 import type { AccountType, CategoryBudget, FinanceCategory, PaymentMethod } from '../types';
 
 export const EXPENSE_CATEGORIES = [
@@ -58,6 +59,7 @@ export const ACCOUNT_TYPES: { value: AccountType; label: string; emoji: string }
   { value: 'current', label: 'Current Bank', emoji: '🏛️' },
   { value: 'gold', label: 'Gold', emoji: '🪙' },
   { value: 'stocks', label: 'Stocks', emoji: '📈' },
+  { value: 'credit_card', label: 'Credit card', emoji: '💳' },
   { value: 'other', label: 'Other', emoji: '💼' },
 ];
 
@@ -177,23 +179,25 @@ export function reassignDeletedCategoryBudgets(
   now: string
 ): { budgets: CategoryBudget[]; droppedIds: string[] } {
   const droppedIds: string[] = [];
-  const next: CategoryBudget[] = [];
+  const kept = budgets.filter((budget) => !sameCategoryName(budget.category, name));
+  const moved: CategoryBudget[] = [];
+  // Budgets carry over: a deleted category's row moves to Other only where Other has
+  // no budget in force that month. "Removed" (0) rows and stop rows just go.
   for (const budget of budgets) {
-    if (!sameCategoryName(budget.category, name)) {
-      next.push(budget);
-      continue;
-    }
-    const otherExists =
-      budgets.some(
-        (other) =>
-          other.id !== budget.id && other.month === budget.month && other.category === 'Other'
-      ) || next.some((other) => other.month === budget.month && other.category === 'Other');
-    if (otherExists) {
+    if (!sameCategoryName(budget.category, name)) continue;
+    const otherInForce = effectiveCategoryLimit([...kept, ...moved], 'Other', budget.month) > 0;
+    if (budget.limit <= 0 || budget.carryStop || otherInForce) {
       droppedIds.push(budget.id);
       continue;
     }
-    next.push({ ...budget, category: 'Other', updatedAt: now });
+    moved.push({ ...budget, category: 'Other', updatedAt: now });
   }
+  // Keep the original order: moved rows stay where they were.
+  const movedById = new Map(moved.map((budget) => [budget.id, budget]));
+  const dropped = new Set(droppedIds);
+  const next = budgets
+    .filter((budget) => !dropped.has(budget.id))
+    .map((budget) => movedById.get(budget.id) ?? budget);
   return { budgets: next, droppedIds };
 }
 

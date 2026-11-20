@@ -6,6 +6,7 @@ import type {
   FinanceTransaction,
   MonthlyBudget,
 } from '../types';
+import { effectiveCategoryBudgets, effectiveMonthlyBudget } from './budgetCarry';
 import { addRupees } from './money';
 
 const toMonthKey = (dateStr: string) => dateStr.slice(0, 7);
@@ -29,7 +30,7 @@ export function checkBudgetAlerts(args: {
   const monthTx = transactions.filter((t) => t.date.startsWith(month));
 
   // Overall monthly budget
-  const monthlyBudget = budgets.find((b) => b.month === month);
+  const monthlyBudget = effectiveMonthlyBudget(budgets, month);
   if (monthlyBudget && monthlyBudget.limit > 0) {
     const spent = monthTx
       .filter((t) => countsAsSpending(t))
@@ -69,7 +70,7 @@ export function checkBudgetAlerts(args: {
   }
 
   // Per-category budgets
-  for (const cb of categoryBudgets.filter((b) => b.month === month)) {
+  for (const cb of effectiveCategoryBudgets(categoryBudgets, month)) {
     if (cb.limit <= 0) continue;
     const spent = monthTx
       .filter((t) => countsAsSpending(t) && t.category === cb.category)

@@ -1,5 +1,6 @@
 /**
- * Reminders that are not tasks or habits: document expiry and maintenance due dates.
+ * Reminders that are not tasks or habits: document expiry, maintenance due dates
+ * and money falling due (bills, EMIs, card dues, debts; built in moneyReminders.ts).
  *
  * Notification ids for these reminders are always NEGATIVE. Task and habit reminders
  * use ids >= 0 (see `hashNotificationId` in reminders.ts), so the task sync can leave
@@ -10,6 +11,7 @@
  * zone, never at a UTC-derived instant.
  */
 import type { MaintenanceItem } from '../types';
+import type { MoneyReminderEntry } from './moneyReminders';
 
 /** Plaintext schedule entry for one document reminder (stored outside the encrypted vault). */
 export interface DocumentReminderEntry {
@@ -287,8 +289,26 @@ function maintenanceCandidates(items: readonly MaintenanceItem[], now: Date, out
   }
 }
 
+function moneyCandidates(entries: readonly MoneyReminderEntry[], nowMs: number, out: Candidate[], seen: Set<string>): void {
+  for (const entry of entries) {
+    if (!entry || typeof entry.key !== 'string' || entry.key.length === 0) continue;
+    const fireAt = extraReminderFireAt(entry.date);
+    if (!fireAt || fireAt.getTime() <= nowMs) continue;
+    const key = `money:${entry.key}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      key,
+      fireAt,
+      title: cleanText(entry.title, MAX_LABEL_LENGTH) || 'Money due',
+      body: cleanText(entry.body, MAX_LABEL_LENGTH),
+      route: entry.route,
+    });
+  }
+}
+
 /**
- * Every document and maintenance reminder that should be scheduled right now:
+ * Every document, maintenance and money reminder that should be scheduled right now:
  * future fire times only (09:00 local on the reminder day), soonest first,
  * capped at `MAX_EXTRA_REMINDERS`, each with a unique negative notification id.
  *
@@ -298,6 +318,8 @@ function maintenanceCandidates(items: readonly MaintenanceItem[], now: Date, out
 export function buildExtraReminderPlans(input: {
   documents: DocumentReminderEntry[];
   maintenance: MaintenanceItem[];
+  /** Bills, EMIs, card dues and debts falling due; empty when money reminders are off. */
+  money?: MoneyReminderEntry[];
   now: Date;
 }): ExtraReminderPlan[] {
   const nowMs = input.now.getTime();
@@ -307,6 +329,7 @@ export function buildExtraReminderPlans(input: {
   const seen = new Set<string>();
   documentCandidates(Array.isArray(input.documents) ? input.documents : [], nowMs, candidates, seen);
   maintenanceCandidates(Array.isArray(input.maintenance) ? input.maintenance : [], input.now, candidates, seen);
+  moneyCandidates(Array.isArray(input.money) ? input.money : [], nowMs, candidates, seen);
 
   candidates.sort((a, b) => {
     const byTime = a.fireAt.getTime() - b.fireAt.getTime();

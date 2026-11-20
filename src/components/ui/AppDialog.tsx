@@ -3,6 +3,7 @@
  *
  *   await showAlert({ title: 'Backup imported' });
  *   if (!(await showConfirm({ title: 'Delete this debt?', tone: 'danger', confirmLabel: 'Delete' }))) return;
+ *   const pick = await showChoice({ title: 'Paid from which account?', choices: [{ value: 'a1', label: 'Cash' }] });
  *
  * Callable from any handler (no hook needed). `<AppDialogHost />` is mounted
  * once at the root and shows one dialog at a time; later calls wait in a queue.
@@ -31,15 +32,31 @@ export interface ConfirmOptions {
   cancelLabel?: string;
 }
 
+export interface DialogChoice {
+  value: string;
+  label: string;
+}
+
+export interface ChoiceOptions {
+  title: string;
+  message?: string;
+  tone?: DialogTone;
+  /** One button each, in order; the first is the primary one. */
+  choices: DialogChoice[];
+  cancelLabel?: string;
+}
+
 interface QueuedDialog {
   id: number;
-  kind: 'alert' | 'confirm';
+  kind: 'alert' | 'confirm' | 'choice';
   title: string;
   message?: string;
   tone: DialogTone;
   confirmLabel: string;
   cancelLabel: string;
-  resolve: (confirmed: boolean) => void;
+  choices?: DialogChoice[];
+  /** The chosen value ('confirm' for the confirm / OK button), or null when cancelled. */
+  resolve: (result: string | null) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,19 +95,19 @@ export function setDialogsSuspended(value: boolean): void {
   emit();
 }
 
-function enqueue(dialog: Omit<QueuedDialog, 'id' | 'resolve'>): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+function enqueue(dialog: Omit<QueuedDialog, 'id' | 'resolve'>): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     queue = [...queue, { ...dialog, id: nextId++, resolve }];
     emit();
   });
 }
 
-function settle(id: number, confirmed: boolean) {
+function settle(id: number, result: string | null) {
   const dialog = queue.find((item) => item.id === id);
   if (!dialog) return;
   queue = queue.filter((item) => item.id !== id);
   emit();
-  dialog.resolve(confirmed);
+  dialog.resolve(result);
 }
 
 /** Shows a message with one button. Resolves when it is closed. */
@@ -114,7 +131,7 @@ export function showAlert(options: AlertOptions | string): Promise<void> {
 export function openAlert(options: AlertOptions): { closed: Promise<void>; close: () => void } {
   const id = nextId; // enqueue takes nextId synchronously
   const closed = showAlert(options);
-  return { closed, close: () => settle(id, false) };
+  return { closed, close: () => settle(id, null) };
 }
 
 /** Asks a yes/no question. Resolves true only when the confirm button is chosen. */
@@ -126,6 +143,19 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
     tone: options.tone ?? 'info',
     confirmLabel: options.confirmLabel ?? 'Confirm',
     cancelLabel: options.cancelLabel ?? 'Cancel',
+  }).then((result) => result === 'confirm');
+}
+
+/** Asks to pick one of several options. Resolves to its value, or null when cancelled. */
+export function showChoice(options: ChoiceOptions): Promise<string | null> {
+  return enqueue({
+    kind: 'choice',
+    title: options.title,
+    message: options.message,
+    tone: options.tone ?? 'info',
+    confirmLabel: '',
+    cancelLabel: options.cancelLabel ?? 'Cancel',
+    choices: options.choices,
   });
 }
 
@@ -141,7 +171,7 @@ export function isDialogOpen(): boolean {
 export function dismissTopDialog(): boolean {
   const dialog = current();
   if (!dialog) return false;
-  settle(dialog.id, false);
+  settle(dialog.id, null);
   return true;
 }
 
@@ -186,13 +216,11 @@ export const AppDialogHost: React.FC = () => {
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
-        settle(dialog.id, false);
+        settle(dialog.id, null);
         return;
       }
       if (event.key === 'Tab') {
-        const buttons = [cancelRef.current, confirmRef.current].filter(
-          (button): button is HTMLButtonElement => button !== null,
-        );
+        const buttons: HTMLButtonElement[] = panelRef.current ? Array.from(panelRef.current.querySelectorAll<HTMLButtonElement>('button')) : [];
         if (buttons.length === 0) return;
         const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
         const next = event.shiftKey ? (index <= 0 ? buttons.length - 1 : index - 1) : (index + 1) % buttons.length;
@@ -216,13 +244,14 @@ export const AppDialogHost: React.FC = () => {
   const titleId = `app-dialog-title-${dialog.id}`;
   const messageId = `app-dialog-message-${dialog.id}`;
   const isConfirm = dialog.kind === 'confirm';
+  const isChoice = dialog.kind === 'choice';
 
   return (
     <div
       className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom))] animate-in fade-in duration-150"
       onMouseDown={(event) => {
         // Clicking the backdrop cancels (acknowledges an alert).
-        if (event.target === event.currentTarget) settle(dialog.id, false);
+        if (event.target === event.currentTarget) settle(dialog.id, null);
       }}
     >
       <div
@@ -248,13 +277,33 @@ export const AppDialogHost: React.FC = () => {
             )}
           </div>
         </div>
+        {isChoice ? (
+          <div className="mt-5 flex flex-col gap-2">
+            <div className="flex max-h-[45vh] flex-col gap-2 overflow-y-auto">
+              {dialog.choices?.map((choice, index) => (
+                <Button
+                  key={choice.value}
+                  ref={index === 0 ? confirmRef : undefined}
+                  variant={index === 0 ? 'primary' : 'secondary'}
+                  className="w-full justify-center"
+                  onClick={() => settle(dialog.id, choice.value)}
+                >
+                  {choice.label}
+                </Button>
+              ))}
+            </div>
+            <Button ref={cancelRef} variant="ghost" className="w-full justify-center" onClick={() => settle(dialog.id, null)}>
+              {dialog.cancelLabel}
+            </Button>
+          </div>
+        ) : (
         <div className={cn('mt-5 flex gap-2', isConfirm ? 'flex-col-reverse sm:flex-row sm:justify-end' : 'justify-end')}>
           {isConfirm && (
             <Button
               ref={cancelRef}
               variant="secondary"
               className="w-full sm:w-auto justify-center"
-              onClick={() => settle(dialog.id, false)}
+              onClick={() => settle(dialog.id, null)}
             >
               {dialog.cancelLabel}
             </Button>
@@ -263,11 +312,12 @@ export const AppDialogHost: React.FC = () => {
             ref={confirmRef}
             variant={dialog.tone === 'danger' && isConfirm ? 'destructive' : 'primary'}
             className={cn('justify-center', isConfirm ? 'w-full sm:w-auto' : 'min-w-24')}
-            onClick={() => settle(dialog.id, true)}
+            onClick={() => settle(dialog.id, 'confirm')}
           >
             {dialog.confirmLabel}
           </Button>
         </div>
+        )}
       </div>
     </div>
   );

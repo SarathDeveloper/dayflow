@@ -13,7 +13,7 @@ import {
   validateTransfer,
   type TransferDraft,
 } from '../lib/ledger';
-import { isSavingsBucketType, resolveSavingsDestinationId } from '../lib/savingsLedger';
+import { resolveSavingsDestinationId, savingsBucketTest } from '../lib/savingsLedger';
 
 interface SavingsModalProps {
   isOpen: boolean;
@@ -69,7 +69,8 @@ export const SavingsModal: React.FC<SavingsModalProps> = ({
     }
 
     const active = accounts.filter((account) => !account.isArchived);
-    const buckets = active.filter((account) => isSavingsBucketType(account.type));
+    const isBucket = savingsBucketTest(accounts);
+    const buckets = active.filter((account) => isBucket(account));
     if (initialTransfer) {
       setFromAccountId(initialTransfer.accountId);
       setToAccountId(initialTransfer.destinationAccountId);
@@ -106,16 +107,17 @@ export const SavingsModal: React.FC<SavingsModalProps> = ({
     [accounts, fromAccountId, initialTransfer?.accountId]
   );
 
+  const isBucket = useMemo(() => savingsBucketTest(accounts), [accounts]);
   const destinationAccounts = useMemo(
     () =>
       accounts.filter(
         (account) =>
-          isSavingsBucketType(account.type) &&
+          isBucket(account) &&
           (!account.isArchived ||
             account.id === toAccountId ||
             account.id === initialTransfer?.destinationAccountId)
       ),
-    [accounts, toAccountId, initialTransfer?.destinationAccountId]
+    [accounts, isBucket, toAccountId, initialTransfer?.destinationAccountId]
   );
 
   const amountPaise = useMemo(() => {
@@ -166,8 +168,8 @@ export const SavingsModal: React.FC<SavingsModalProps> = ({
       return;
     }
     const destination = accounts.find((account) => account.id === toAccountId);
-    if (!destination || !isSavingsBucketType(destination.type)) {
-      setError('Choose a savings, gold, or stocks account.');
+    if (!destination || !isBucket(destination)) {
+      setError('Choose a savings bank, gold or stocks account.');
       return;
     }
 

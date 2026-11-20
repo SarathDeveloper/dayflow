@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownCircle,
   ArrowRightLeft,
@@ -49,6 +49,14 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Dropdown } from '../ui/Dropdown';
 import { LedgerTransactionRow, LedgerEmptyState } from './LedgerTransactionRow';
+import { hasSavingsOnlyAccounts, ledgerAccounts, ledgerTransactions } from '../../lib/savingsLedger';
+import { cardStatus, isCreditCard } from '../../lib/creditCard';
+import { isCurrentPeriod, periodLabel, shiftAnchor } from '../../lib/ledgerRange';
+import { financialYearLabel, financialYearOf, financialYearRange, transactionsCsv } from '../../lib/statementCsv';
+import { isShareCancel } from '../../lib/backup';
+import { shareTextFile } from '../../services/shareFile';
+import { showAlert } from '../ui/AppDialog';
+import { StatementImportModal, type ImportRow } from './StatementImportModal';
 import { AccountDetailView } from './AccountDetailView';
 import { TransactionDetailModal } from './TransactionDetailModal';
 
@@ -68,9 +76,11 @@ export interface LedgerViewProps {
   onDeleteTransaction: (id: string) => void;
   onUpdateLedgerSettings: (partial: Partial<LedgerSettings>) => void;
   onBulkAssignAccount: (txIds: string[], accountId: string) => void;
+  /** Adds the ticked rows of a bank statement to an account. */
+  onImportStatement?: (accountId: string, rows: ImportRow[]) => void;
 }
 
-type RangeMode = 'day' | 'week' | 'month' | 'year' | 'all';
+type RangeMode = 'day' | 'week' | 'month' | 'year' | 'fy' | 'all';
 type FilterType = TransactionType | 'all';
 
 const RANGE_LABELS: { value: RangeMode; label: string }[] = [
@@ -78,12 +88,13 @@ const RANGE_LABELS: { value: RangeMode; label: string }[] = [
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
   { value: 'year', label: 'Year' },
+  { value: 'fy', label: 'FY' },
   { value: 'all', label: 'All' },
 ];
 
 export const LedgerView: React.FC<LedgerViewProps> = ({
-  accounts,
-  transactions,
+  accounts: allAccounts,
+  transactions: allTransactions,
   ledgerSettings,
   financeCategories,
   selectedDate,
@@ -97,7 +108,11 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   onDeleteTransaction,
   onUpdateLedgerSettings,
   onBulkAssignAccount,
+  onImportStatement,
 }) => {
+  // Savings-only banks live on the Savings page: leave them and their own entries out.
+  const accounts = useMemo(() => ledgerAccounts(allAccounts), [allAccounts]);
+  const transactions = useMemo(() => ledgerTransactions(allTransactions, allAccounts), [allTransactions, allAccounts]);
   const settings = ledgerSettings[0];
   const allowNegative = Boolean(settings?.allowNegativeBalance);
 
@@ -105,9 +120,15 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   const [detailTx, setDetailTx] = useState<FinanceTransaction | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [rangeMode, setRangeMode] = useState<RangeMode>('month');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  // The period the history shows; ‹ › step it. Follows the app's selected day when that changes.
+  const [anchor, setAnchor] = useState(selectedDate);
+  useEffect(() => setAnchor(selectedDate), [selectedDate]);
+  const [showCustom, setShowCustom] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<FilterType>('all');
   const [accountFilter, setAccountFilter] = useState('all');
@@ -149,18 +170,21 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
     if (customFrom || customTo) {
       return { from: customFrom || '0000-01-01', to: customTo || '9999-12-31' };
     }
-    if (rangeMode === 'day') return dayRange(selectedDate);
-    if (rangeMode === 'week') return weekRange(selectedDate);
-    if (rangeMode === 'month') return monthRange(monthKeyOf(selectedDate));
-    if (rangeMode === 'year') return yearRange(Number(selectedDate.slice(0, 4)));
+    if (rangeMode === 'day') return dayRange(anchor);
+    if (rangeMode === 'week') return weekRange(anchor);
+    if (rangeMode === 'month') return monthRange(monthKeyOf(anchor));
+    if (rangeMode === 'year') return yearRange(Number(anchor.slice(0, 4)));
+    if (rangeMode === 'fy') return financialYearRange(financialYearOf(anchor));
     return { from: '0000-01-01', to: '9999-12-31' };
-  }, [rangeMode, selectedDate, customFrom, customTo]);
+  }, [rangeMode, anchor, customFrom, customTo]);
+  const custom = showCustom || customFrom !== '' || customTo !== '';
+  const stepUnit = rangeMode === 'all' || custom ? null : rangeMode;
 
   const rangeSummary = useMemo(() => summarize(transactions, range, { cashFlow: true }), [transactions, range]);
 
   const accountNames = useMemo(
-    () => new Map(accounts.map((a) => [a.id, accountLabel(a)])),
-    [accounts]
+    () => new Map(allAccounts.map((a) => [a.id, accountLabel(a)])),
+    [allAccounts]
   );
 
   const filtered = useMemo(() => {
@@ -223,7 +247,9 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
     setPaymentFilter('all');
     setCustomFrom('');
     setCustomTo('');
+    setShowCustom(false);
     setRangeMode('month');
+    setAnchor(selectedDate);
   };
 
   const unassigned = useMemo(
@@ -232,6 +258,24 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   );
 
   const defaultAccountName = resolveDefaultAccountId(accounts, settings);
+
+  /** The list on screen (range and filters applied) as a CSV file. */
+  const exportShown = async () => {
+    const label =
+      rangeMode === 'fy' && !custom
+        ? financialYearLabel(financialYearOf(anchor)).replace(/\s+/g, '-')
+        : rangeMode === 'all' && !custom
+          ? 'all'
+          : `${range.from}-to-${range.to}`;
+    try {
+      await shareTextFile(transactionsCsv(filtered, allAccounts), `dayflow-ledger-${label}.csv`, 'text/csv', 'Share ledger');
+    } catch (error) {
+      if (!isShareCancel(error)) {
+        console.warn('Ledger export failed:', error);
+        void showAlert({ title: 'Could not export the list', message: 'Try again in a moment.', tone: 'warning' });
+      }
+    }
+  };
   const handleEdit = (tx: FinanceTransaction) =>
     tx.type === 'transfer' ? onEditTransfer(tx) : onEditTransaction(tx);
 
@@ -289,144 +333,114 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Wallet className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-            Money Ledger
-          </h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            {`${activeAccounts.length} active account${activeAccounts.length === 1 ? '' : 's'} · balances derived from transactions`}
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setShowSettings(true)}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            title="Ledger settings"
-            aria-label="Ledger settings"
-          >
-            <Settings2 className="w-4 h-4" />
-          </button>
-          <Button variant="secondary" size="sm" onClick={onAddAccount}>
-            <Plus className="w-3.5 h-3.5" /> Account
-          </Button>
-        </div>
-      </div>
-
-      {/* Total available */}
-      <Card className="p-4 bg-gradient-to-br from-indigo-600 to-violet-600 border-indigo-500 text-white">
-        <p className="text-[10px] uppercase tracking-wider font-bold text-indigo-100">
-          Total available money
-        </p>
-        <p className="text-3xl font-black tracking-tight mt-0.5">{formatPaise(totalBalance)}</p>
-        <div className="grid grid-cols-2 gap-2 mt-3">
-          <div className="rounded-xl bg-white/10 px-2.5 py-2">
-            <p className="text-[10px] font-bold text-indigo-100 flex items-center gap-1">
-              <Wallet className="w-3 h-3" /> Cash wallet
+      {/* Total, in one compact card (settings and Add account sit on it) */}
+      <Card className="p-3.5 bg-gradient-to-br from-indigo-600 to-violet-600 border-indigo-500 text-white">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-wider font-bold text-indigo-100">Total balance</p>
+            <p className="text-2xl font-black tracking-tight truncate">{formatPaise(totalBalance)}</p>
+            <p className="text-[11px] font-semibold text-indigo-100 truncate">
+              Cash {formatPaise(cashBalance)}
+              {hasSavingsOnlyAccounts(allAccounts) ? ' · savings banks not included' : ''}
             </p>
-            <p className="text-sm font-black truncate">{formatPaise(cashBalance)}</p>
           </div>
-          <div className="rounded-xl bg-white/10 px-2.5 py-2">
-            <p className="text-[10px] font-bold text-indigo-100 flex items-center gap-1">
-              <Landmark className="w-3 h-3" /> {monthLabelFromKey(summaryMonth)}
-            </p>
-            <p className="text-sm font-black truncate">
-              {monthSummary.current.incomePaise >= monthSummary.current.expensePaise ? '+' : '−'}
-              {formatPaise(Math.abs(monthSummary.current.netPaise))}
-            </p>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-indigo-100 hover:bg-white/10"
+              title="Ledger settings"
+              aria-label="Ledger settings"
+            >
+              <Settings2 className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onAddAccount}
+              className="h-9 px-2.5 rounded-xl flex items-center gap-1 bg-white/15 hover:bg-white/25 text-xs font-bold"
+              aria-label="Add account"
+            >
+              <Plus className="w-3.5 h-3.5" /> Account
+            </button>
           </div>
         </div>
       </Card>
 
-      {/* Prominent actions */}
+      {/* Actions */}
       <div className="grid grid-cols-3 gap-2">
         <button
           type="button"
           onClick={() => onAddIncome()}
-          className="flex flex-col items-center justify-center gap-1 py-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300 font-bold text-xs active:scale-95 transition-all min-h-[64px]"
+          className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300 font-bold text-xs active:scale-95 transition-all min-h-[44px]"
         >
-          <ArrowUpCircle className="w-5 h-5" />
+          <ArrowUpCircle className="w-4 h-4" />
           Income
         </button>
         <button
           type="button"
           onClick={() => onAddExpense()}
-          className="flex flex-col items-center justify-center gap-1 py-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 font-bold text-xs active:scale-95 transition-all min-h-[64px]"
+          className="flex items-center justify-center gap-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 font-bold text-xs active:scale-95 transition-all min-h-[44px]"
         >
-          <ArrowDownCircle className="w-5 h-5" />
+          <ArrowDownCircle className="w-4 h-4" />
           Expense
         </button>
         <button
           type="button"
           onClick={() => onTransfer()}
-          className="flex flex-col items-center justify-center gap-1 py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs active:scale-95 transition-all min-h-[64px]"
+          className="flex items-center justify-center gap-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs active:scale-95 transition-all min-h-[44px]"
         >
-          <ArrowRightLeft className="w-5 h-5" />
+          <ArrowRightLeft className="w-4 h-4" />
           Transfer
         </button>
       </div>
 
-      {/* Accounts */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Accounts
-          </h3>
-          <button
-            type="button"
-            onClick={onAddAccount}
-            className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-          >
-            + Add
-          </button>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      {/* Accounts: one swipeable row (tap opens history, long list scrolls sideways) */}
+      <div className="space-y-1.5">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar snap-x -mx-1 px-1 pb-1">
           {activeAccounts.map((account) => {
             const balance = balances.get(account.id) || 0;
             const meta = accountTypeMeta(account.type);
+            const card = isCreditCard(account) ? cardStatus(account, allTransactions, todayString()) : null;
             return (
-              <Card key={account.id} className="p-3">
-                <div className="flex items-start gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setDetailAccountId(account.id)}
-                    className="flex-1 min-w-0 text-left flex items-start gap-2.5"
-                  >
-                    <span className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-base shrink-0">
-                      {meta.emoji}
+              <button
+                key={account.id}
+                type="button"
+                onClick={() => setDetailAccountId(account.id)}
+                className="snap-start shrink-0 w-40 text-left rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2.5"
+              >
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                  <span aria-hidden="true">{meta.emoji}</span>
+                  <span className="truncate">{account.name}</span>
+                </span>
+                {card ? (
+                  <>
+                    <span className="block text-base font-black text-rose-600 dark:text-rose-400 truncate">
+                      {formatRupeesCompact(card.owed)} owed
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-bold text-slate-900 dark:text-white truncate">
-                        {account.name}
-                      </span>
-                      <span className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                        {meta.label}
-                        {account.lastFourDigits ? ` · ····${account.lastFourDigits}` : ''}
-                      </span>
-                      <span
-                        className={`block text-lg font-black tracking-tight truncate ${
-                          balance < 0
-                            ? 'text-rose-600 dark:text-rose-400'
-                            : 'text-slate-900 dark:text-white'
-                        }`}
-                      >
-                        {formatPaise(balance)}
-                      </span>
+                    <span className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                      {card.statement && card.statement.due > 0
+                        ? `${card.statement.dueDate < todayString() ? 'Overdue' : 'Due'} ${formatRupeesCompact(card.statement.due)} · ${formatShortDate(card.statement.dueDate)}`
+                        : card.available != null
+                          ? `${formatRupeesCompact(card.available)} credit left`
+                          : 'Nothing due'}
                     </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onEditAccount(account)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
-                    aria-label={`Edit ${account.name}`}
-                  >
-                    <Settings2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </Card>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      className={`block text-base font-black truncate ${
+                        balance < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
+                      }`}
+                    >
+                      {formatPaise(balance)}
+                    </span>
+                    <span className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                      {meta.label}
+                      {account.lastFourDigits ? ` · ····${account.lastFourDigits}` : ''}
+                    </span>
+                  </>
+                )}
+              </button>
             );
           })}
         </div>
@@ -464,35 +478,53 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
         )}
       </div>
 
-      {/* Monthly summary */}
-      <Card className="p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Monthly summary
-          </h3>
-          <div className="flex items-center gap-0.5">
-            <button
-              type="button"
-              onClick={() => setSummaryMonth((m) => shiftMonthKey(m, -1))}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-              aria-label="Previous month"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200 min-w-[86px] text-center">
-              {monthLabelFromKey(summaryMonth)}
+      {/* Monthly summary: one line; tap for the breakdown */}
+      <Card className="p-3 space-y-3">
+        <div className="flex items-center justify-between gap-1">
+          <button
+            type="button"
+            onClick={() => setSummaryMonth((m) => shiftMonthKey(m, -1))}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            aria-label="Previous month"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSummary((v) => !v)}
+            aria-expanded={showSummary}
+            className="flex-1 min-w-0 text-center"
+          >
+            <span className="block text-[11px] font-bold text-slate-700 dark:text-slate-200">
+              {monthLabelFromKey(summaryMonth)} {showSummary ? '▴' : '▾'}
             </span>
-            <button
-              type="button"
-              onClick={() => setSummaryMonth((m) => shiftMonthKey(m, 1))}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-              aria-label="Next month"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
+            <span className="block text-[11px] text-slate-500 dark:text-slate-400 truncate">
+              In {formatRupeesCompact(monthSummary.current.incomePaise / 100)} · Out{' '}
+              {formatRupeesCompact(monthSummary.current.expensePaise / 100)} · Net flow{' '}
+              <span
+                className={
+                  monthSummary.current.netPaise >= 0
+                    ? 'font-bold text-emerald-600 dark:text-emerald-400'
+                    : 'font-bold text-rose-600 dark:text-rose-400'
+                }
+              >
+                {monthSummary.current.netPaise >= 0 ? '+' : '−'}
+                {formatRupeesCompact(Math.abs(monthSummary.current.netPaise) / 100)}
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSummaryMonth((m) => shiftMonthKey(m, 1))}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            aria-label="Next month"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
 
+        {showSummary && (
+        <>
         <div className="grid grid-cols-3 gap-2">
           <div>
             <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">Income</p>
@@ -599,6 +631,8 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
             </div>
           </div>
         )}
+        </>
+        )}
       </Card>
 
       {/* History */}
@@ -607,8 +641,27 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
             Transactions
           </h3>
-          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
-            {filtered.length} found
+          <span className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+              {filtered.length} found
+            </span>
+            {onImportStatement && (
+              <button
+                type="button"
+                onClick={() => setImportOpen(true)}
+                className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+              >
+                Import
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={filtered.length === 0}
+              onClick={() => void exportShown()}
+              className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-40"
+            >
+              Export
+            </button>
           </span>
         </div>
 
@@ -622,9 +675,10 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
                   setRangeMode(r.value);
                   setCustomFrom('');
                   setCustomTo('');
+                  setShowCustom(false);
                 }}
                 className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
-                  rangeMode === r.value && !customFrom && !customTo
+                  rangeMode === r.value && !custom
                     ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
                     : 'text-slate-500 dark:text-slate-400'
                 }`}
@@ -632,8 +686,56 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
                 {r.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                // Start from the period on screen, so the list does not jump.
+                if (!custom && rangeMode !== 'all') {
+                  setCustomFrom(range.from);
+                  setCustomTo(range.to);
+                }
+                setShowCustom(true);
+              }}
+              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                custom
+                  ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              Custom
+            </button>
           </div>
         </div>
+
+        {stepUnit && (
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setAnchor((a) => shiftAnchor(a, stepUnit, -1))}
+              className="w-9 h-9 rounded-xl flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+              aria-label={`Previous ${stepUnit}`}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnchor(todayString())}
+              className="text-sm font-bold text-slate-800 dark:text-slate-100"
+              title="Back to today"
+            >
+              {periodLabel(anchor, stepUnit)}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnchor((a) => shiftAnchor(a, stepUnit, 1))}
+              disabled={isCurrentPeriod(anchor, stepUnit, todayString())}
+              className="w-9 h-9 rounded-xl flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-30"
+              aria-label={`Next ${stepUnit}`}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-2">
           <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900 px-2 py-1.5">
@@ -651,7 +753,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-2 py-1.5">
-            <p className="text-[9px] font-bold uppercase text-slate-500 dark:text-slate-400">Net</p>
+            <p className="text-[9px] font-bold uppercase text-slate-500 dark:text-slate-400">Net flow</p>
             <p className="text-xs font-black text-slate-700 dark:text-slate-200 truncate">
               {formatPaise(rangeSummary.netPaise)}
             </p>
@@ -731,6 +833,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
               </button>
             )}
           </div>
+          {custom && (
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
@@ -755,6 +858,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
               />
             </div>
           </div>
+          )}
         </Card>
 
         {grouped.length === 0 ? (
@@ -796,7 +900,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
                   <LedgerTransactionRow
                     key={tx.id}
                     tx={tx}
-                    accounts={accounts}
+                    accounts={allAccounts}
                     onEdit={handleEdit}
                     onDelete={onDeleteTransaction}
                     onOpen={setDetailTx}
@@ -841,9 +945,24 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
         onBulkAssignAccount={onBulkAssignAccount}
       />
 
+      {onImportStatement && (
+        <StatementImportModal
+          isOpen={importOpen}
+          accounts={accounts.filter((a) => !a.isArchived)}
+          transactions={allTransactions}
+          categories={{
+            income: financeCategoryNames('income', financeCategories, []),
+            expense: financeCategoryNames('expense', financeCategories, []),
+          }}
+          defaultAccountId={defaultAccountName ?? undefined}
+          onClose={() => setImportOpen(false)}
+          onImport={onImportStatement}
+        />
+      )}
+
       <TransactionDetailModal
         tx={detailTx}
-        accounts={accounts}
+        accounts={allAccounts}
         onClose={() => setDetailTx(null)}
         onEdit={handleEdit}
         onDelete={onDeleteTransaction}

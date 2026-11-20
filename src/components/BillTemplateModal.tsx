@@ -43,7 +43,7 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
   const [active, setActive] = useState(true);
   const [note, setNote] = useState('');
 
-  const activeAccounts = accounts.filter((a) => !a.isArchived);
+  const activeAccounts = accounts.filter((a) => !a.isArchived && !a.savingsOnly);
 
   useEffect(() => {
     if (!isOpen) return;

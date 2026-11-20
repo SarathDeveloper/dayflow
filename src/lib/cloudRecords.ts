@@ -34,6 +34,7 @@ export const RECORD_COLLECTIONS: readonly RecordCollection[] = [
   'diaryEntries',
   'focusSessions',
   'maintenanceItems',
+  'moneyGoals',
   'billTemplates',
   'billPayments',
 ];

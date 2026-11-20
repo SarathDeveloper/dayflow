@@ -23,6 +23,7 @@ import { AccountPicker } from './ledger/AccountPicker';
 import {
   computeAccountBalances,
   nowTimeString,
+  todayString,
   resolveDefaultAccountId,
   isLedgerError,
   validateEntry,
@@ -30,6 +31,7 @@ import {
 } from '../lib/ledger';
 import { formatPaise, isAmountParseOk, parseAmountInput } from '../lib/money';
 import { evaluateAmount, isAmountExpression } from '../lib/quickEntry';
+import { recentCategories } from '../lib/financeRecurrence';
 
 interface FinanceModalProps {
   isOpen: boolean;
@@ -82,7 +84,8 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
   const selectable = useMemo(
     () =>
       accounts
-        .filter((a) => !a.isArchived || a.id === initialTransaction?.accountId)
+        // Savings-only banks take savings moves, not income or spending.
+        .filter((a) => (!a.isArchived && !a.savingsOnly) || a.id === initialTransaction?.accountId)
         .sort((a, b) => {
           if (a.type === 'cash' && b.type !== 'cash') return -1;
           if (b.type === 'cash' && a.type !== 'cash') return 1;
@@ -112,9 +115,13 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
       const account = resolveDefaultAccountId(accounts, settings) || initialAccountId;
       setType(startType);
       setAmount('');
-      setCategory(startType === 'expense' ? EXPENSE_CATEGORIES[0] : INCOME_CATEGORIES[0]);
+      setCategory(
+        recentCategories(transactions, startType, 1)[0] ??
+          (startType === 'expense' ? EXPENSE_CATEGORIES[0] : INCOME_CATEGORIES[0])
+      );
       setNote('');
-      setDate(selectedDate);
+      // A new entry is for today; the badge on Date says when it is not.
+      setDate(todayString());
       setTime(nowTimeString());
       setAccountId(initialAccountId || account);
       const selected = accounts.find((a) => a.id === (initialAccountId || account));
@@ -134,10 +141,19 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
     return financeCategoryNames(categoryKind, financeCategories, preserved);
   }, [categoryKind, financeCategories, initialTransaction, transactions]);
 
+  // Up to 4 recently used categories of this kind, as one-tap chips.
+  const recent = useMemo(
+    () =>
+      recentCategories(transactions, categoryKind, 4).filter((name) =>
+        categories.some((option) => option.toLowerCase() === name.toLowerCase())
+      ),
+    [transactions, categoryKind, categories]
+  );
+
   useEffect(() => {
     if (categories.some((name) => name.toLowerCase() === category.toLowerCase())) return;
-    setCategory(categories[0] || (categoryKind === 'income' ? INCOME_CATEGORIES[0] : EXPENSE_CATEGORIES[0]));
-  }, [categories, category, categoryKind]);
+    setCategory(recent[0] || categories[0] || (categoryKind === 'income' ? INCOME_CATEGORIES[0] : EXPENSE_CATEGORIES[0]));
+  }, [categories, category, categoryKind, recent]);
 
   const balances = useMemo(
     () => computeAccountBalances(accounts, transactions),
@@ -361,11 +377,30 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
             </p>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Category
               </label>
+              {recent.length > 1 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {recent.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setCategory(name)}
+                      aria-pressed={name.toLowerCase() === category.toLowerCase()}
+                      className={`px-2.5 py-1 min-h-[32px] rounded-full border text-xs font-semibold transition-colors ${
+                        name.toLowerCase() === category.toLowerCase()
+                          ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+                          : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <CategorySelect
                 value={category}
                 options={categories}
@@ -379,9 +414,17 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
                 className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
                 Date
+                {date !== todayString() && (
+                  <span className="rounded-full bg-amber-100 dark:bg-amber-950/50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:text-amber-200">
+                    Not today
+                  </span>
+                )}
               </label>
               <input
                 type="date"
@@ -391,9 +434,6 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
                 className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
                 <Calendar className="w-3 h-3" /> Time
@@ -512,7 +552,8 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
             )}
           </div>
 
-          <div className="flex gap-2 pt-2 pb-1">
+          {/* Stays above the keyboard and the fold while the form scrolls. */}
+          <div className="sticky -bottom-5 -mx-5 px-5 py-3 flex gap-2 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
             <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>
               Cancel
             </Button>
