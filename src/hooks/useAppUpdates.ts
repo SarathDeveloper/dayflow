@@ -8,6 +8,7 @@ import {
   isApkOfferSnoozed,
   lastUpdateCheckAt,
   openInstallPermissionSettings,
+  restartIntoUpdate,
   snoozeApkOffer,
 } from '../services/appUpdater';
 import { openAlert, showAlert, showConfirm } from '../components/ui/AppDialog';
@@ -69,9 +70,9 @@ export async function offerApkUpdate(manifest: UpdateManifest, manual = false): 
 }
 
 /**
- * Android: checks for updates a few seconds after start and on returning to the
- * app (at most every few hours). New app code downloads silently and applies on
- * the next start; a new APK is offered.
+ * Android: checks for updates 3 seconds after start and on returning to the
+ * app (at most every few hours). New app code downloads in the background and asks
+ * to restart (or applies on the next start); a new APK is offered.
  */
 export function useAppUpdates(enabled: boolean): void {
   useEffect(() => {
@@ -82,8 +83,18 @@ export function useAppUpdates(enabled: boolean): void {
       const result = await checkForUpdates();
       if (disposed) return;
       if (result.kind === 'apk') await offerApkUpdate(result.manifest);
+      // New app code is ready: say so, instead of waiting silently for the next full start.
+      if (result.kind === 'downloaded') {
+        const now = await showConfirm({
+          title: 'Update ready',
+          message: 'Restart Dayflow now to use it? Otherwise it applies next time you open the app.',
+          confirmLabel: 'Restart now',
+          cancelLabel: 'Later',
+        });
+        if (now && !disposed) await restartIntoUpdate();
+      }
     };
-    const timer = window.setTimeout(() => void run(true), 8000);
+    const timer = window.setTimeout(() => void run(true), 3000);
     const listener = CapApp.addListener('appStateChange', ({ isActive }) => {
       if (isActive) void run(false);
     });
