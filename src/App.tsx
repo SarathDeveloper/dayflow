@@ -2815,6 +2815,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
     tx?: FinanceTransaction | null,
     defaults?: { type?: 'income' | 'expense'; accountId?: string }
   ) => {
+    if (!tx && accounts.filter((a) => !a.isArchived && !a.savingsOnly).length === 0) {
+      openAccountModal(null);
+      return;
+    }
     setEditingTransaction(tx || null);
     setFinanceDraftDefaults(defaults || null);
     setIsFinanceModalOpen(true);
@@ -4736,6 +4740,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
           onDeleteFinanceCategory={handleDeleteFinanceCategory}
           initialType={financeDraftDefaults?.type}
           initialAccountId={financeDraftDefaults?.accountId}
+          onAddAccount={() => openAccountModal(null)}
         />
       )}
 

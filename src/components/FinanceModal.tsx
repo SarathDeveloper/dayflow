@@ -51,6 +51,7 @@ interface FinanceModalProps {
   initialType?: 'income' | 'expense';
   /** Pre-select the funding/receiving account. */
   initialAccountId?: string;
+  onAddAccount?: () => void;
 }
 
 export const FinanceModal: React.FC<FinanceModalProps> = ({
@@ -67,6 +68,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
   onDeleteFinanceCategory,
   initialType,
   initialAccountId,
+  onAddAccount,
 }) => {
   const settings = ledgerSettings[0];
   const [type, setType] = useState<TransactionType>('expense');
@@ -131,6 +133,17 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
       setRecurrenceEndDate('');
     }
   }, [initialTransaction, selectedDate, isOpen, initialType, initialAccountId, accounts, settings]);
+
+  useEffect(() => {
+    if (!accountId && selectable.length > 0) {
+      const def = resolveDefaultAccountId(accounts, settings) || selectable[0]?.id;
+      if (def) {
+        setAccountId(def);
+        const selected = accounts.find((a) => a.id === def);
+        setPaymentMethod(selected?.type === 'cash' ? 'cash' : 'bank_transfer');
+      }
+    }
+  }, [accounts, accountId, settings, selectable]);
 
   const categoryKind = type === 'income' ? 'income' : 'expense';
   const categories = useMemo(() => {
@@ -200,6 +213,11 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
     const parsed = parseAmountInput(isAmountExpression(amount) ? String(evaluateAmount(amount) ?? amount) : amount);
     if (!isAmountParseOk(parsed)) {
       setError(parsed.error);
+      return;
+    }
+
+    if (selectable.length === 0) {
+      setError('Add a bank account or cash wallet first before saving an entry.');
       return;
     }
 
@@ -357,6 +375,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
             onChange={handleSelectAccount}
             projectedBalances={projected}
             emptyHint="No active accounts. Add a cash wallet or bank account in the Money Ledger first."
+            onAddAccount={onAddAccount}
           />
 
           {accountId && amountPaise > 0 && (

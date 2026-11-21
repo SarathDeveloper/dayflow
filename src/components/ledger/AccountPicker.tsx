@@ -1,4 +1,5 @@
 import React from 'react';
+import { Plus } from 'lucide-react';
 import type { Account } from '../../types';
 import { accountTypeMeta } from '../../data/financeCategories';
 import { formatPaise } from '../../lib/money';
@@ -14,6 +15,7 @@ interface AccountPickerProps {
   projectedBalances?: Map<string, number>;
   emptyHint?: string;
   label?: string;
+  onAddAccount?: () => void;
 }
 
 export const AccountPicker: React.FC<AccountPickerProps> = ({
@@ -25,6 +27,7 @@ export const AccountPicker: React.FC<AccountPickerProps> = ({
   projectedBalances,
   emptyHint,
   label = 'Account',
+  onAddAccount,
 }) => {
   return (
     <div>
@@ -32,73 +35,97 @@ export const AccountPicker: React.FC<AccountPickerProps> = ({
         {label}
       </label>
       {accounts.length === 0 ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl px-3 py-3">
-          {emptyHint || 'No active accounts yet. Add a bank account or cash wallet first.'}
-        </p>
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl space-y-2">
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            {emptyHint || 'No active accounts yet. Add a bank account or cash wallet first.'}
+          </p>
+          {onAddAccount && (
+            <button
+              type="button"
+              onClick={onAddAccount}
+              className="w-full py-2 px-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 active:scale-95 transition-all"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Account
+            </button>
+          )}
+        </div>
       ) : (
-        <div className="grid grid-cols-1 gap-1.5 max-h-56 overflow-y-auto pr-0.5">
-          {accounts
-            .filter((account) => account.id !== excludeId)
-            .map((account) => {
-              const selected = account.id === value;
-              const balance = balances.get(account.id) || 0;
-              const projected = projectedBalances?.get(account.id);
-              const meta = accountTypeMeta(account.type);
-              return (
-                <button
-                  key={account.id}
-                  type="button"
-                  onClick={() => onChange(account.id)}
-                  aria-pressed={selected}
-                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-colors min-h-[46px] ${
-                    selected
-                      ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700'
-                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  <span className="text-base leading-none shrink-0">{meta.emoji}</span>
-                  <span className="flex-1 min-w-0">
-                    <span
-                      className={`block text-xs font-bold truncate ${
-                        selected
-                          ? 'text-indigo-700 dark:text-indigo-300'
-                          : 'text-slate-800 dark:text-slate-200'
-                      }`}
-                    >
-                      {account.name}
-                      {account.lastFourDigits ? (
-                        <span className="font-medium text-slate-500 dark:text-slate-400">
-                          {' '}
-                          ····{account.lastFourDigits}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                      {balance < 0 ? 'Overdrawn' : 'Available'} {formatPaise(balance)}
-                      {projected != null && projected !== balance && (
-                        <span
-                          className={`ml-1 font-semibold ${
-                            projected < 0
-                              ? 'text-rose-600 dark:text-rose-400'
-                              : 'text-slate-600 dark:text-slate-300'
-                          }`}
-                        >
-                          → {formatPaise(projected)}
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  <span
-                    className={`w-4 h-4 rounded-full border shrink-0 ${
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-1 gap-1.5 max-h-56 overflow-y-auto pr-0.5">
+            {accounts
+              .filter((account) => account.id !== excludeId)
+              .map((account) => {
+                const selected = account.id === value;
+                const balance = balances.get(account.id) || 0;
+                const projected = projectedBalances?.get(account.id);
+                const meta = accountTypeMeta(account.type);
+                return (
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => onChange(account.id)}
+                    aria-pressed={selected}
+                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-colors min-h-[46px] ${
                       selected
-                        ? 'border-indigo-600 bg-indigo-600 ring-2 ring-indigo-200 dark:ring-indigo-900'
-                        : 'border-slate-300 dark:border-slate-600'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
                     }`}
-                    aria-hidden="true"
-                  />
-                </button>
-              );
-            })}
+                  >
+                    <span className="text-base leading-none shrink-0">{meta.emoji}</span>
+                    <span className="flex-1 min-w-0">
+                      <span
+                        className={`block text-xs font-bold truncate ${
+                          selected
+                            ? 'text-indigo-700 dark:text-indigo-300'
+                            : 'text-slate-800 dark:text-slate-200'
+                        }`}
+                      >
+                        {account.name}
+                        {account.lastFourDigits ? (
+                          <span className="font-medium text-slate-500 dark:text-slate-400">
+                            {' '}
+                            ····{account.lastFourDigits}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                        {balance < 0 ? 'Overdrawn' : 'Available'} {formatPaise(balance)}
+                        {projected != null && projected !== balance && (
+                          <span
+                            className={`ml-1 font-semibold ${
+                              projected < 0
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            → {formatPaise(projected)}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                    <span
+                      className={`w-4 h-4 rounded-full border shrink-0 ${
+                        selected
+                          ? 'border-indigo-600 bg-indigo-600 ring-2 ring-indigo-200 dark:ring-indigo-900'
+                          : 'border-slate-300 dark:border-slate-600'
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                );
+              })}
+          </div>
+          {onAddAccount && (
+            <button
+              type="button"
+              onClick={onAddAccount}
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add another account
+            </button>
+          )}
         </div>
       )}
     </div>
