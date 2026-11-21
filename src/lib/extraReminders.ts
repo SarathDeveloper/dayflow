@@ -10,8 +10,9 @@
  * time: a reminder for 2027-03-01 fires at 09:00 on that day in the phone's time
  * zone, never at a UTC-derived instant.
  */
-import type { MaintenanceItem } from '../types';
+import type { BucketItem, MaintenanceItem } from '../types';
 import type { MoneyReminderEntry } from './moneyReminders';
+import { BUCKET_REMINDER_DAYS, bucketItemsToRemind, bucketReminderAnchor, bucketRoute } from './bucketList';
 
 /** Plaintext schedule entry for one document reminder (stored outside the encrypted vault). */
 export interface DocumentReminderEntry {
@@ -307,8 +308,33 @@ function moneyCandidates(entries: readonly MoneyReminderEntry[], nowMs: number, 
   }
 }
 
+/** Text of a Bucket List reminder, e.g. "Visit Ladakh: 30 days to go". */
+export function bucketReminderText(title: string, daysLeft: number): { title: string; body: string } {
+  const name = cleanText(title, MAX_LABEL_LENGTH) || 'A bucket list item';
+  const when = daysLeft <= 0 ? 'its day is today' : `${daysPhrase(daysLeft)} to go`;
+  return { title: 'Bucket List', body: `${name}: ${when}. Still on for it?` };
+}
+
+function bucketCandidates(items: readonly BucketItem[], nowMs: number, out: Candidate[], seen: Set<string>): void {
+  for (const item of bucketItemsToRemind(items.filter((i) => i && typeof i.id === 'string' && i.id.length > 0))) {
+    const anchor = bucketReminderAnchor(item.target);
+    const due = anchor ? parseLocalDay(anchor) : null;
+    if (!anchor || !due) continue;
+    for (const offset of BUCKET_REMINDER_DAYS) {
+      const date = shiftLocalDate(anchor, -offset);
+      const day = date ? parseLocalDay(date) : null;
+      const fireAt = date ? extraReminderFireAt(date) : null;
+      if (!date || !day || !fireAt || fireAt.getTime() <= nowMs) continue;
+      const key = `bucket:${item.id}:${date}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, fireAt, ...bucketReminderText(item.title, daysBetween(day, due)), route: bucketRoute(item.id) });
+    }
+  }
+}
+
 /**
- * Every document, maintenance and money reminder that should be scheduled right now:
+ * Every document, maintenance, money and Bucket List reminder that should be scheduled right now:
  * future fire times only (09:00 local on the reminder day), soonest first,
  * capped at `MAX_EXTRA_REMINDERS`, each with a unique negative notification id.
  *
@@ -320,6 +346,8 @@ export function buildExtraReminderPlans(input: {
   maintenance: MaintenanceItem[];
   /** Bills, EMIs, card dues and debts falling due; empty when money reminders are off. */
   money?: MoneyReminderEntry[];
+  /** Bucket List items; only open, dated ones with reminders on are used. */
+  bucket?: BucketItem[];
   now: Date;
 }): ExtraReminderPlan[] {
   const nowMs = input.now.getTime();
@@ -330,6 +358,7 @@ export function buildExtraReminderPlans(input: {
   documentCandidates(Array.isArray(input.documents) ? input.documents : [], nowMs, candidates, seen);
   maintenanceCandidates(Array.isArray(input.maintenance) ? input.maintenance : [], input.now, candidates, seen);
   moneyCandidates(Array.isArray(input.money) ? input.money : [], nowMs, candidates, seen);
+  bucketCandidates(Array.isArray(input.bucket) ? input.bucket : [], nowMs, candidates, seen);
 
   candidates.sort((a, b) => {
     const byTime = a.fireAt.getTime() - b.fireAt.getTime();

@@ -5,7 +5,7 @@
 
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, MoneyGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession, MaintenanceItem } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, MoneyGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, DiaryReflection, Alarm, FocusSession, MaintenanceItem, BucketItem } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -99,6 +99,8 @@ import {
   type NotificationSetupResult,
 } from './services/nativeNotificationService';
 import { buildExtraReminderPlans, DOCUMENTS_ROUTE, maintenanceIdFromRoute } from './lib/extraReminders';
+import { bucketIdFromRoute, goalDraftFor, markBucketDone, moneyGoalDraftFor, reopenBucketItem, unlinkMissingGoals } from './lib/bucketList';
+import type { BucketItemInput } from './components/bucket/BucketItemModal';
 import { buildMoneyReminders, moneySectionFromRoute, type MoneySection } from './lib/moneyReminders';
 import { cardDues } from './lib/creditCard';
 import { readDocumentReminders, subscribeDocumentReminders } from './services/documentReminderStore';
@@ -183,6 +185,7 @@ import { buildSpokenReminderPlans } from './lib/spokenReminders';
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
 const PasswordVaultView = lazy(() => import('./components/PasswordVaultView'));
 const MaintenanceView = lazy(() => import('./components/MaintenanceView'));
+const BucketListView = lazy(() => import('./components/bucket/BucketListView').then((m) => ({ default: m.BucketListView })));
 const DocumentVaultView = lazy(() => import('./components/DocumentVaultView'));
 // Tabs off the home screen load on first visit, keeping the first download small.
 const CalendarView = lazy(() => import('./components/CalendarView').then((m) => ({ default: m.CalendarView })));
@@ -263,6 +266,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const userDebtsKey = storageKeys.debts;
   const userSavingsKey = storageKeys.savingsGoals;
   const userMoneyGoalsKey = storageKeys.moneyGoals;
+  const userBucketKey = storageKeys.bucketItems;
   const userAlertStateKey = storageKeys.alertState;
   const userBillTemplatesKey = storageKeys.billTemplates;
   const userBillPaymentsKey = storageKeys.billPayments;
@@ -384,6 +388,16 @@ export default function App({ skipInitialLock = false }: AppProps) {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse money goals:', e);
+    }
+    return [];
+  });
+
+  const [bucketItems, setBucketItems] = useState<BucketItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(userBucketKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse bucket list:', e);
     }
     return [];
   });
@@ -592,7 +606,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
   } | null>(null);
   /** Entries a one-tap add just saved (quick entry, repeat or savings chips), for the Undo toast. */
   /** A money reminder was tapped: FinanceView opens this section. */
-  const [requestedMoneySection, setRequestedMoneySection] = useState<{ section: MoneySection; at: number } | null>(null);
+  const [requestedMoneySection, setRequestedMoneySection] = useState<{ section: MoneySection | 'savings'; at: number } | null>(null);
+  const [requestedBucketItem, setRequestedBucketItem] = useState<{ id: string; at: number } | null>(null);
+  const [bucketToast, setBucketToast] = useState<string | null>(null);
+  const dismissBucketToast = useCallback(() => setBucketToast(null), []);
   const [recentlyAddedTransactions, setRecentlyAddedTransactions] = useState<{
     ids: string[];
     message: string;
@@ -674,6 +691,9 @@ export default function App({ skipInitialLock = false }: AppProps) {
       const savedMoneyGoals = localStorage.getItem(userMoneyGoalsKey);
       setMoneyGoals(savedMoneyGoals ? JSON.parse(savedMoneyGoals) : []);
 
+      const savedBucket = localStorage.getItem(userBucketKey);
+      setBucketItems(savedBucket ? JSON.parse(savedBucket) : []);
+
       const savedAlertState = localStorage.getItem(userAlertStateKey);
       setBudgetAlertState(savedAlertState ? JSON.parse(savedAlertState) : {});
       setFinanceAlerts([]);
@@ -729,7 +749,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     } finally {
       setReadyHydrationToken(String(dataEpoch));
     }
-  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userMoneyGoalsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userMaintenanceKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userMoneyGoalsKey, userBucketKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userFocusSessionsKey, userMaintenanceKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   usePersistJson(userTasksKey, tasks, canPersist);
@@ -766,6 +786,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
   usePersistJson(userBillPaymentsKey, billPayments, canPersist);
   usePersistJson(userSavingsEntriesKey, savingsEntries, canPersist);
   usePersistJson(userMoneyGoalsKey, moneyGoals, canPersist);
+  usePersistJson(userBucketKey, bucketItems, canPersist);
   usePersistJson(userGoalsKey, goals, canPersist);
   usePersistJson(userHabitsKey, habits, canPersist);
   usePersistJson(userHabitCheckInsKey, habitCheckIns, canPersist);
@@ -811,6 +832,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     savingsGoals,
     savingsEntries,
     moneyGoals,
+    bucketItems,
     billTemplates,
     billPayments,
     goals,
@@ -942,7 +964,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
         removeListeners = await registerReminderListeners({
           onDue: (taskId) => {
             // Document / maintenance reminders: the system notification is enough while the app is open.
-            if (taskId === DOCUMENTS_ROUTE || maintenanceIdFromRoute(taskId) || moneySectionFromRoute(taskId)) return;
+            if (taskId === DOCUMENTS_ROUTE || maintenanceIdFromRoute(taskId) || moneySectionFromRoute(taskId) || bucketIdFromRoute(taskId)) return;
             if (taskId.startsWith('habit:')) {
               setActiveTab('habits');
               return;
@@ -958,6 +980,12 @@ export default function App({ skipInitialLock = false }: AppProps) {
             }
             if (maintenanceIdFromRoute(taskId)) {
               setActiveTab('maintenance');
+              return;
+            }
+            const bucketId = bucketIdFromRoute(taskId);
+            if (bucketId) {
+              setRequestedBucketItem({ id: bucketId, at: Date.now() });
+              setActiveTab('bucket');
               return;
             }
             const moneySection = moneySectionFromRoute(taskId);
@@ -1115,6 +1143,10 @@ export default function App({ skipInitialLock = false }: AppProps) {
   // Bills, EMIs, card dues and debts also remind through this sync (moneyReminders.ts).
   const moneyReminderInputRef = useRef({ billTemplates, debts, accounts, transactions });
   moneyReminderInputRef.current = { billTemplates, debts, accounts, transactions };
+  const bucketItemsRef = useRef(bucketItems);
+  const bucketMoneyGoalIds = useMemo(() => new Set(bucketItems.flatMap((i) => (i.moneyGoalId ? [i.moneyGoalId] : []))), [bucketItems]);
+  const bucketGoalIds = useMemo(() => new Set(bucketItems.flatMap((i) => (i.goalId ? [i.goalId] : []))), [bucketItems]);
+  bucketItemsRef.current = bucketItems;
   const pushExtraReminders = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
     const today = todayString();
@@ -1132,6 +1164,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
               cards: cardDues(money.accounts, money.transactions, today),
               today,
             }),
+      bucket: settingsRef.current.bucketReminders === false ? [] : bucketItemsRef.current,
       now: new Date(),
     });
     void syncExtraReminders(plans, { granted }).catch((e) => console.warn('Failed to sync document/maintenance reminders:', e));
@@ -1142,7 +1175,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (!isNativeAndroid()) return;
     const timer = setTimeout(() => pushExtraReminders(Boolean(nativeSetup?.granted)), 600);
     return () => clearTimeout(timer);
-  }, [maintenanceItems, documentReminderTick, nativeSetup?.granted, pushExtraReminders, billTemplates, billPayments, debts, accounts, transactions, settings.moneyReminders]);
+  }, [maintenanceItems, documentReminderTick, nativeSetup?.granted, pushExtraReminders, billTemplates, billPayments, debts, accounts, transactions, settings.moneyReminders, bucketItems, settings.bucketReminders]);
   const extraReminderNote = !isNativeAndroid()
     ? 'On the website these reminders show on Today only; notifications need the Android app.'
     : nativeSetup && !nativeSetup.granted
@@ -1163,6 +1196,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       savingsGoals,
       savingsEntries,
       moneyGoals,
+      bucketItems,
       goals,
       habits,
       habitCheckIns,
@@ -1907,6 +1941,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       ...savingsGoals.map((g) => g.id),
       ...savingsEntries.map((e) => e.id),
       ...moneyGoals.map((g) => g.id),
+      ...bucketItems.map((b) => b.id),
       ...billTemplates.map((b) => b.id),
       ...billPayments.map((p) => p.id),
       ...goals.map((g) => g.id),
@@ -1937,6 +1972,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     setDebts([]);
     setSavingsGoals([]);
     setMoneyGoals([]);
+    setBucketItems([]);
     setBudgetAlertState({});
     setFinanceAlerts([]);
     setBillTemplates([]);
@@ -1968,6 +2004,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       savingsGoals,
       savingsEntries,
       moneyGoals,
+      bucketItems,
       goals,
       habits,
       habitCheckIns,
@@ -2006,6 +2043,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     if (present.includes('savingsGoals')) setSavingsGoals(data.savingsGoals ?? []);
     if (present.includes('savingsEntries')) setSavingsEntries(data.savingsEntries ?? []);
     if (present.includes('moneyGoals')) setMoneyGoals(data.moneyGoals ?? []);
+    if (present.includes('bucketItems')) setBucketItems(data.bucketItems ?? []);
     if (present.includes('goals')) setGoals(data.goals ?? []);
     if (present.includes('habits')) setHabits(data.habits ?? []);
     if (present.includes('habitCheckIns')) setHabitCheckIns(data.habitCheckIns ?? []);
@@ -2061,6 +2099,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
       savingsGoals,
       savingsEntries,
       moneyGoals,
+      bucketItems,
       goals,
       habits,
       habitCheckIns,
@@ -2219,6 +2258,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
     markDeleted(storageKeys, [id]);
     const now = new Date().toISOString();
     setGoals((prev) => prev.filter((goal) => goal.id !== id));
+    setBucketItems((prev) => unlinkMissingGoals(prev, new Set(prev.map((i) => i.moneyGoalId ?? '')), new Set(goals.filter((g) => g.id !== id).map((g) => g.id)), now));
     setHabits((prev) =>
       prev.map((habit) =>
         habit.goalId === id ? { ...habit, goalId: undefined, updatedAt: now } : habit
@@ -3415,6 +3455,91 @@ export default function App({ skipInitialLock = false }: AppProps) {
   const handleDeleteMoneyGoal = (id: string) => {
     markDeleted(storageKeys, [id]);
     setMoneyGoals((prev) => prev.filter((g) => g.id !== id));
+    setBucketItems((prev) =>
+      unlinkMissingGoals(prev, new Set(moneyGoals.filter((g) => g.id !== id).map((g) => g.id)), new Set(prev.map((i) => i.goalId ?? '')), new Date().toISOString())
+    );
+  };
+
+  // Bucket List (lib/bucketList.ts). Every edit stamps updatedAt; deletes leave a tombstone.
+  const handleSaveBucketItem = (input: BucketItemInput) => {
+    const now = new Date().toISOString();
+    setBucketItems((prev) => {
+      const existing = input.id ? prev.find((i) => i.id === input.id) : undefined;
+      const fields = {
+        title: input.title,
+        category: input.category,
+        note: input.note,
+        target: input.target,
+        cost: input.cost,
+        remind: input.target ? input.remind : undefined,
+      };
+      if (existing) return prev.map((i) => (i.id === existing.id ? { ...i, ...fields, updatedAt: now } : i));
+      return [...prev, { id: newLedgerId('bucket'), ...fields, createdAt: now, updatedAt: now }];
+    });
+  };
+
+  const handleDeleteBucketItem = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    setBucketItems((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const handleBucketDone = (id: string, done: { doneOn: string; memory?: string; photo?: BucketItem['photo'] }) => {
+    const now = new Date().toISOString();
+    setBucketItems((prev) => prev.map((i) => (i.id === id ? markBucketDone(i, done, now) : i)));
+  };
+
+  const handleBucketReopen = (id: string) => {
+    const now = new Date().toISOString();
+    setBucketItems((prev) => prev.map((i) => (i.id === id ? reopenBucketItem(i, now) : i)));
+  };
+
+  /** "Start saving": a savings goal for the item's cost, linked both ways by id. */
+  const handleBucketStartSaving = (id: string) => {
+    const item = bucketItems.find((i) => i.id === id);
+    if (!item || item.moneyGoalId || !(item.cost && item.cost > 0)) return;
+    const now = new Date().toISOString();
+    const draft = moneyGoalDraftFor(item);
+    const goalId = newLedgerId('mgoal');
+    const savingsOnly = accounts.find((a) => a.savingsOnly && !a.isArchived);
+    setMoneyGoals((prev) => [
+      ...prev,
+      {
+        id: goalId,
+        name: draft.name || item.title,
+        target: draft.target ?? 0,
+        targetDate: draft.targetDate,
+        accountId: savingsOnly?.id,
+        savedAmount: savingsOnly ? undefined : 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    setBucketItems((prev) => prev.map((i) => (i.id === id ? { ...i, moneyGoalId: goalId, updatedAt: now } : i)));
+    setBucketToast('Savings goal added on the Savings page.');
+  };
+
+  /** "Make it a goal": a dated Goal from the item. */
+  const handleBucketMakeGoal = (id: string) => {
+    const item = bucketItems.find((i) => i.id === id);
+    if (!item || item.goalId) return;
+    const now = new Date().toISOString();
+    const draft = goalDraftFor(item, todayString());
+    const goalId = newLedgerId('goal');
+    setGoals((prev) => [
+      ...prev,
+      {
+        id: goalId,
+        title: draft.title || item.title,
+        note: draft.note,
+        startDate: draft.startDate ?? todayString(),
+        targetDate: draft.targetDate ?? todayString(),
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    setBucketItems((prev) => prev.map((i) => (i.id === id ? { ...i, goalId, updatedAt: now } : i)));
+    setBucketToast('Goal added on the Goals page.');
   };
 
   // Savings goal handler
@@ -4328,6 +4453,38 @@ export default function App({ skipInitialLock = false }: AppProps) {
           />
         )}
 
+        {activeTab === 'bucket' && (
+          <Suspense fallback={<p role="status">Loading Bucket List…</p>}>
+            <BucketListView
+              items={bucketItems}
+              moneyGoals={moneyGoals}
+              goals={goals}
+              accounts={accounts}
+              transactions={transactions}
+              reminderNote={
+                settings.bucketReminders === false
+                  ? 'Bucket List reminders are off on the Notifications page.'
+                  : !isNativeAndroid()
+                    ? 'Reminders ring on the Android app, not on the website.'
+                    : extraReminderNote
+              }
+              requestedItem={requestedBucketItem}
+              onSave={handleSaveBucketItem}
+              onDelete={handleDeleteBucketItem}
+              onMarkDone={handleBucketDone}
+              onReopen={handleBucketReopen}
+              onStartSaving={handleBucketStartSaving}
+              onMakeGoal={handleBucketMakeGoal}
+              onOpenSavings={() => {
+                setRequestedMoneySection({ section: 'savings', at: Date.now() });
+                setActiveTab('finance');
+              }}
+              onOpenGoals={() => setActiveTab('goals')}
+              onRegisterClose={registerGoalClose}
+            />
+          </Suspense>
+        )}
+
         {activeTab === 'goals' && (
           <GoalsView
             goals={goals}
@@ -4338,6 +4495,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
             onSaveHabit={handleSaveHabit}
             onLinkHabit={handleLinkHabit}
             onRegisterClose={registerGoalClose}
+            fromBucket={bucketGoalIds}
           />
         )}
 
@@ -4443,6 +4601,7 @@ export default function App({ skipInitialLock = false }: AppProps) {
             debts={debts}
             savingsGoals={savingsGoals}
             moneyGoals={moneyGoals}
+            bucketGoalIds={bucketMoneyGoalIds}
             onSaveMoneyGoal={handleSaveMoneyGoal}
             onDeleteMoneyGoal={handleDeleteMoneyGoal}
             billTemplates={billTemplates}
@@ -4728,6 +4887,8 @@ export default function App({ skipInitialLock = false }: AppProps) {
           onDismiss={() => setRecentlyDeletedTransaction(null)}
         />
       )}
+
+      {bucketToast && <Toast message={bucketToast} onDismiss={dismissBucketToast} />}
 
       {/* Undo Toast for one-tap adds (quick entry, repeat chips, savings chips) */}
       {recentlyAddedTransactions && (

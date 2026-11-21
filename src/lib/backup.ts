@@ -22,6 +22,7 @@ import type {
   SavingsGoal,
   Task,
   MoneyGoal,
+  BucketItem,
 } from '../types';
 import { DEFAULT_SETTINGS } from './persistence';
 import { todayString } from './ledger';
@@ -50,6 +51,7 @@ export const BACKUP_ARRAY_KEYS = [
   'focusSessions',
   'maintenanceItems',
   'moneyGoals',
+  'bucketItems',
   'billTemplates',
   'billPayments',
 ] as const;
@@ -77,6 +79,7 @@ export interface BackupCollections {
   focusSessions: FocusSession[];
   maintenanceItems: MaintenanceItem[];
   moneyGoals: MoneyGoal[];
+  bucketItems: BucketItem[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   settings: NotificationSettings;
@@ -150,6 +153,7 @@ export function buildBackup(
     focusSessions: input.focusSessions ?? [],
     maintenanceItems: input.maintenanceItems ?? [],
     moneyGoals: input.moneyGoals ?? [],
+    bucketItems: input.bucketItems ?? [],
     billTemplates: input.billTemplates,
     billPayments: input.billPayments,
     settings: input.settings,
@@ -213,7 +217,7 @@ export function parseBackup(raw: unknown): ParsedBackup {
       // Older backups omit these lists. Leaving them absent keeps what is saved
       // (custom category names, focus sessions recorded since, maintenance).
       if (
-        (key === 'financeCategories' || key === 'focusSessions' || key === 'maintenanceItems' || key === 'moneyGoals') &&
+        (key === 'financeCategories' || key === 'focusSessions' || key === 'maintenanceItems' || key === 'moneyGoals' || key === 'bucketItems') &&
         obj[key] === undefined
       ) {
         continue;

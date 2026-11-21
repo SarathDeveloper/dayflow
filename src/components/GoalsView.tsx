@@ -18,6 +18,8 @@ interface GoalsViewProps {
   onSaveHabit: (habit: Partial<Habit>) => void;
   onLinkHabit: (habitId: string, goalId?: string) => void;
   onRegisterClose: (close: (() => void) | null) => void;
+  /** Goals made from a Bucket List item get a small label. */
+  fromBucket?: ReadonlySet<string>;
 }
 
 const STATUS_LABEL: Record<Goal['status'], string> = {
@@ -35,6 +37,7 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
   onSaveHabit,
   onLinkHabit,
   onRegisterClose,
+  fromBucket,
 }) => {
   const today = todayDateString();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -117,7 +120,7 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
                   className="min-w-0 text-left flex-1"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-bold text-sm text-slate-900 dark:text-white">{goal.title}</p>
+                    <p className="font-bold text-sm text-slate-900 dark:text-white">{goal.title}{fromBucket?.has(goal.id) && <span className="ml-1.5 rounded-full bg-indigo-50 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300">Bucket List</span>}</p>
                     <span
                       className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
                         goal.status === 'active'

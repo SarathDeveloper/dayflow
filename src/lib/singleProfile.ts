@@ -116,6 +116,7 @@ function writeMergedSnapshot(
     'diaryEntries',
     'maintenanceItems',
     'moneyGoals',
+    'bucketItems',
     'billTemplates',
     'billPayments',
     'settings',
@@ -180,6 +181,7 @@ function mergeSnapshots(globalData: SyncData, profileData: SyncData, tombstones:
       tombstones
     ),
     moneyGoals: mergeCollection(globalData.moneyGoals ?? [], profileData.moneyGoals ?? [], tombstones),
+    bucketItems: mergeCollection(globalData.bucketItems ?? [], profileData.bucketItems ?? [], tombstones),
     billTemplates: mergeCollection(globalData.billTemplates, profileData.billTemplates, tombstones),
     billPayments: mergeCollection(globalData.billPayments, profileData.billPayments, tombstones),
     settings: globalData.settings,

@@ -35,6 +35,7 @@ export const RECORD_COLLECTIONS: readonly RecordCollection[] = [
   'focusSessions',
   'maintenanceItems',
   'moneyGoals',
+  'bucketItems',
   'billTemplates',
   'billPayments',
 ];

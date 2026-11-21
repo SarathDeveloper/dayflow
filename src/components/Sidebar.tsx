@@ -10,6 +10,7 @@ import {
   Folder,
   Home,
   KeyRound,
+  Mountain,
   Plus,
   Repeat,
   Settings,
@@ -55,6 +56,7 @@ function navSections(): NavSection[] {
       items: [
         { id: 'habits', label: 'Habits', icon: Repeat },
         { id: 'goals', label: 'Goals', icon: Target },
+        { id: 'bucket', label: 'Bucket List', icon: Mountain },
         { id: 'stats', label: 'Progress', icon: TrendingUp },
         { id: 'diary', label: 'Diary', icon: BookOpen },
       ],

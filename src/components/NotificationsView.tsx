@@ -303,6 +303,19 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         </Card>
       </section>
 
+      {/* Bucket List */}
+      <section aria-labelledby="notif-bucket">
+        <h3 id="notif-bucket" className={sectionLabel}>Bucket List</h3>
+        <Card className="px-4">
+          <SettingSwitch
+            label="Dated bucket list items"
+            description="Reminds you 30 and 7 days before, at 9 AM."
+            checked={settings.bucketReminders !== false}
+            onChange={(bucketReminders) => update({ bucketReminders })}
+          />
+        </Card>
+      </section>
+
       {/* Sound */}
       <section aria-labelledby="notif-sound">
         <h3 id="notif-sound" className={sectionLabel}>Sound</h3>

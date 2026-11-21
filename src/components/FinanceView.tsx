@@ -109,6 +109,8 @@ interface FinanceViewProps {
   savingsGoals: SavingsGoal[];
   /** Named savings goals, shown on the Savings page. */
   moneyGoals: MoneyGoal[];
+  /** Savings goals started from a Bucket List item get a small label. */
+  bucketGoalIds?: ReadonlySet<string>;
   onSaveMoneyGoal: (goal: Partial<MoneyGoal>) => boolean;
   onDeleteMoneyGoal: (id: string) => void;
   billTemplates: BillTemplate[];
@@ -142,7 +144,7 @@ interface FinanceViewProps {
   onDeleteSavings: (id: string) => void;
   onQuickAddSavings: (amount: number) => void;
   /** Set when a money reminder was tapped: opens that section (`at` makes each tap new). */
-  requestedSection?: { section: 'bills' | 'debts' | 'ledger'; at: number } | null;
+  requestedSection?: { section: 'bills' | 'debts' | 'ledger' | 'savings'; at: number } | null;
   /** Picks (or unpicks) a bank as kept for future savings. */
   onSetSavingsOnly: (accountId: string, savingsOnly: boolean) => void;
   onDismissAlert: (key: string) => void;
@@ -223,6 +225,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   debts,
   savingsGoals,
   moneyGoals,
+  bucketGoalIds,
   onSaveMoneyGoal,
   onDeleteMoneyGoal,
   billTemplates,
@@ -2171,7 +2174,12 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                       className="w-full text-left rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2.5 hover:border-emerald-300 dark:hover:border-emerald-800"
                     >
                       <div className="flex items-baseline justify-between gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-white truncate">{goal.name}</span>
+                        <span className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                          {goal.name}
+                          {bucketGoalIds?.has(goal.id) && (
+                            <span className="ml-1.5 rounded-full bg-indigo-50 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300">Bucket List</span>
+                          )}
+                        </span>
                         <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 shrink-0">{p.percent}%</span>
                       </div>
                       <div className="h-2 mt-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">

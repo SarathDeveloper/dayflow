@@ -91,9 +91,11 @@ export interface NotificationSettings {
   };
   /** Phone reminders for bills, EMIs, card dues and debts. Missing means on. */
   moneyReminders?: boolean;
+  /** Phone reminders before dated Bucket List items. Missing means on. */
+  bucketReminders?: boolean;
 }
 
-export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents' | 'notifications';
+export type ActiveTab = 'home' | 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings' | 'vault' | 'maintenance' | 'documents' | 'notifications' | 'bucket';
 
 export type GoalStatus = 'active' | 'paused' | 'completed';
 
@@ -446,6 +448,36 @@ export interface MoneyGoal {
   savedAmount?: number;
   /** Finished or set aside: listed after active goals. */
   archived?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type BucketCategory = 'travel' | 'experience' | 'buy' | 'learn' | 'food' | 'people' | 'other';
+
+/** By a year (counts as Dec 31) or by an exact local date. */
+export type BucketTarget = { kind: 'year'; year: number } | { kind: 'date'; date: string };
+
+/** Something to do, see or buy someday (lib/bucketList.ts). Synced like every other collection. */
+export interface BucketItem {
+  id: string;
+  userId?: string;
+  title: string;
+  category: BucketCategory;
+  note?: string;
+  target?: BucketTarget;
+  /** Rough cost in rupees. */
+  cost?: number;
+  /** Savings goal started from this item. */
+  moneyGoalId?: string;
+  /** Goal made from this item. */
+  goalId?: string;
+  /** Phone reminders before the target (dated items only). */
+  remind?: boolean;
+  /** YYYY-MM-DD it was done (local); unset while still open. */
+  doneOn?: string;
+  memory?: string;
+  /** One photo from the day, a resized JPEG data URL. */
+  photo?: DiaryImage;
   createdAt: string;
   updatedAt: string;
 }
