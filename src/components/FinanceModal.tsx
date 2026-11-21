@@ -37,7 +37,8 @@ interface FinanceModalProps {
   isOpen: boolean;
   onClose: () => void;
   /** Return false to keep the modal open (validation refused the entry). */
-  onSave: (tx: Partial<FinanceTransaction>) => boolean | void;
+  /** `allowOverdraft`: the money already left the account, so save below zero. */
+  onSave: (tx: Partial<FinanceTransaction>, options?: { allowOverdraft?: boolean }) => boolean | void;
   initialTransaction?: FinanceTransaction | null;
   selectedDate: string;
   accounts: Account[];
@@ -188,9 +189,13 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Set when the save was refused for low balance: the form offers "Save anyway".
+  const [overdraft, setOverdraft] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent | null, allowOverdraft = false) => {
+    e?.preventDefault();
     if (isSubmitting) return;
+    setOverdraft(false);
 
     const parsed = parseAmountInput(isAmountExpression(amount) ? String(evaluateAmount(amount) ?? amount) : amount);
     if (!isAmountParseOk(parsed)) {
@@ -220,8 +225,9 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
       transactions,
       settings: settings || { allowNegativeBalance: false },
     });
-    if (isLedgerError(validation)) {
+    if (isLedgerError(validation) && !(allowOverdraft && validation.code === 'insufficient-balance')) {
       setError(validation.message);
+      setOverdraft(validation.code === 'insufficient-balance');
       return;
     }
 
@@ -237,7 +243,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
       paymentMethod,
       accountId,
       recurrence: draft.recurrence,
-    });
+    }, allowOverdraft ? { allowOverdraft: true } : undefined);
     if (saved === false) {
       setIsSubmitting(false);
       return;
@@ -267,14 +273,6 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-sm">
-          {error && (
-            <p
-              role="alert"
-              className="text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl px-3 py-2"
-            >
-              {error}
-            </p>
-          )}
 
           {/* Type toggle */}
           <div className="grid grid-cols-2 gap-2">
@@ -552,14 +550,31 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
             )}
           </div>
 
-          {/* Stays above the keyboard and the fold while the form scrolls. */}
-          <div className="sticky -bottom-5 -mx-5 px-5 py-3 flex gap-2 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+          {/* Stays above the keyboard and the fold while the form scrolls; the reason a save
+              was refused shows here too, where the person just tapped. */}
+          <div className="sticky -bottom-5 -mx-5 px-5 py-3 space-y-2 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+          {error && (
+            <div role="alert" className="text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl px-3 py-2 space-y-1.5">
+              <p>{error}</p>
+              {overdraft && (
+                <button
+                  type="button"
+                  onClick={() => handleSubmit(null, true)}
+                  className="font-bold text-rose-700 dark:text-rose-300 underline"
+                >
+                  Already paid? Save anyway
+                </button>
+              )}
+            </div>
+          )}
+          <div className="flex gap-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" variant="primary" className="flex-1" disabled={isSubmitting}>
               {initialTransaction ? 'Save Changes' : type === 'income' ? 'Add Income' : 'Add Expense'}
             </Button>
+          </div>
           </div>
         </form>
       </div>
