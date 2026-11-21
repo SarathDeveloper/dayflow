@@ -114,18 +114,31 @@ function nativeHash() {
  * The latest release's update.json. Null only when no release exists yet; any
  * other failure stops the script, because guessing would reset the build number.
  */
-function previousManifest() {
+async function previousManifest() {
   const view = run('gh', ['release', 'view', '--repo', REPO, '--json', 'tagName', '-q', '.tagName'], {
     capture: true,
     raw: true,
     noShell: true,
   });
-  if (view.status !== 0) {
-    if (/release not found/i.test(view.stderr)) return null;
-    throw new Error(`Could not read the latest release: ${view.stderr || 'gh failed'}. Check gh auth and the network, then retry.`);
+  let tag = view.status === 0 ? view.stdout : null;
+  if (!tag) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+        headers: { 'User-Agent': 'Dayflow-Release' },
+      });
+      if (res.status === 404) return null;
+      if (res.ok) {
+        const data = await res.json();
+        tag = data.tag_name;
+      }
+    } catch {
+      // ignore
+    }
   }
-  const tag = view.stdout;
-  if (!tag) throw new Error('gh returned no tag for the latest release.');
+  if (!tag) {
+    if (view.status !== 0 && /release not found/i.test(view.stderr)) return null;
+    throw new Error(`Could not read the latest release: ${view.stderr || 'gh/fetch failed'}. Check gh auth and the network, then retry.`);
+  }
   const tmp = join(outDir, 'previous-update.json');
   rmSync(tmp, { force: true });
   const download = run('gh', ['release', 'download', tag, '--repo', REPO, '--pattern', 'update.json', '--output', tmp, '--clobber'], {
@@ -134,6 +147,17 @@ function previousManifest() {
     noShell: true,
   });
   if (download.status !== 0 || !existsSync(tmp)) {
+    try {
+      const res = await fetch(`https://github.com/${REPO}/releases/download/${tag}/update.json`);
+      if (res.ok) {
+        const text = await res.text();
+        writeFileSync(tmp, text);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!existsSync(tmp)) {
     throw new Error(`Could not download update.json from ${tag}: ${download.stderr || 'missing asset'}.`);
   }
   const manifest = JSON.parse(readFileSync(tmp, 'utf8'));
@@ -147,7 +171,7 @@ mkdirSync(outDir, { recursive: true });
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const versionName = pkg.version;
 const native = nativeHash();
-const previous = previousManifest();
+const previous = await previousManifest();
 // Before the first release, phones run build 2 (no updater) or a hand-installed
 // test build 3; the first release is build 4 so both are offered it.
 const previousBuild = previous ? previous.apk.build : 3;
