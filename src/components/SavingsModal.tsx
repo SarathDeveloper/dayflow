@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PiggyBank, X } from 'lucide-react';
 import type { Account, FinanceTransaction, LedgerSettings, SavingsEntry } from '../types';
 import { Button } from './ui/Button';
@@ -46,53 +46,86 @@ export const SavingsModal: React.FC<SavingsModalProps> = ({
 }) => {
   const settings = ledgerSettings[0];
   const legacyMode = Boolean(initialLegacy);
-  const [fromAccountId, setFromAccountId] = useState<string | undefined>();
-  const [toAccountId, setToAccountId] = useState<string | undefined>();
-  const [date, setDate] = useState(selectedDate);
-  const [time, setTime] = useState(nowTimeString());
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setError(null);
-    setIsSubmitting(false);
-    if (initialLegacy) {
-      setDate(initialLegacy.date);
-      setAmount(String(initialLegacy.amount));
-      setNote(initialLegacy.note || '');
-      setFromAccountId(undefined);
-      setToAccountId(undefined);
-      return;
-    }
-
-    const active = accounts.filter((account) => !account.isArchived);
-    const isBucket = savingsBucketTest(accounts);
-    const buckets = active.filter((account) => isBucket(account));
-    if (initialTransfer) {
-      setFromAccountId(initialTransfer.accountId);
-      setToAccountId(initialTransfer.destinationAccountId);
-      setAmount(String(initialTransfer.amount));
-      setDate(initialTransfer.date);
-      setTime(initialTransfer.time || nowTimeString());
-      setNote(initialTransfer.note || '');
-      return;
-    }
-
+  const [fromAccountId, setFromAccountId] = useState<string | undefined>(() => {
+    if (initialTransfer?.accountId) return initialTransfer.accountId;
+    return resolveDefaultAccountId(accounts, settings);
+  });
+  const [toAccountId, setToAccountId] = useState<string | undefined>(() => {
+    if (initialTransfer?.destinationAccountId) return initialTransfer.destinationAccountId;
     const from = resolveDefaultAccountId(accounts, settings);
     let to = resolveSavingsDestinationId(accounts, settings?.defaultSavingsAccountId);
     if (to && to === from) {
-      to = buckets.find((account) => account.id !== from)?.id;
+      const active = accounts.filter((account) => !account.isArchived);
+      const isBucket = savingsBucketTest(accounts);
+      to = active.filter((account) => isBucket(account)).find((account) => account.id !== from)?.id;
     }
-    setFromAccountId(from);
-    setToAccountId(to);
-    setAmount(presetAmount && presetAmount > 0 ? String(presetAmount) : '');
-    setDate(selectedDate || todayString());
-    setTime(nowTimeString());
-    setNote('');
-  }, [isOpen, initialLegacy, initialTransfer, accounts, settings, selectedDate, presetAmount]);
+    return to;
+  });
+  const [date, setDate] = useState(() => initialLegacy?.date || initialTransfer?.date || selectedDate || todayString());
+  const [time, setTime] = useState(() => initialTransfer?.time || nowTimeString());
+  const [amount, setAmount] = useState(() => {
+    if (initialLegacy) return String(initialLegacy.amount);
+    if (initialTransfer) return String(initialTransfer.amount);
+    return presetAmount && presetAmount > 0 ? String(presetAmount) : '';
+  });
+  const [note, setNote] = useState(() => initialLegacy?.note || initialTransfer?.note || '');
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const prevOpenRef = useRef(isOpen);
+  const prevInitialTransferIdRef = useRef<string | undefined>(initialTransfer?.id);
+  const prevInitialLegacyIdRef = useRef<string | undefined>(initialLegacy?.id);
+
+  useEffect(() => {
+    const justOpened = !prevOpenRef.current && isOpen;
+    const transferChanged = prevInitialTransferIdRef.current !== initialTransfer?.id;
+    const legacyChanged = prevInitialLegacyIdRef.current !== initialLegacy?.id;
+    prevOpenRef.current = isOpen;
+    prevInitialTransferIdRef.current = initialTransfer?.id;
+    prevInitialLegacyIdRef.current = initialLegacy?.id;
+
+    if (!isOpen) return;
+
+    if (justOpened || transferChanged || legacyChanged) {
+      setError(null);
+      setIsSubmitting(false);
+      if (initialLegacy) {
+        setDate(initialLegacy.date);
+        setAmount(String(initialLegacy.amount));
+        setNote(initialLegacy.note || '');
+        setFromAccountId(undefined);
+        setToAccountId(undefined);
+        return;
+      }
+
+      const active = accounts.filter((account) => !account.isArchived);
+      const isBucket = savingsBucketTest(accounts);
+      const buckets = active.filter((account) => isBucket(account));
+      if (initialTransfer) {
+        setFromAccountId(initialTransfer.accountId);
+        setToAccountId(initialTransfer.destinationAccountId);
+        setAmount(String(initialTransfer.amount));
+        setDate(initialTransfer.date);
+        setTime(initialTransfer.time || nowTimeString());
+        setNote(initialTransfer.note || '');
+        return;
+      }
+
+      if (justOpened) {
+        const from = resolveDefaultAccountId(accounts, settings);
+        let to = resolveSavingsDestinationId(accounts, settings?.defaultSavingsAccountId);
+        if (to && to === from) {
+          to = buckets.find((account) => account.id !== from)?.id;
+        }
+        setFromAccountId(from);
+        setToAccountId(to);
+        setAmount(presetAmount && presetAmount > 0 ? String(presetAmount) : '');
+        setDate(selectedDate || todayString());
+        setTime(nowTimeString());
+        setNote('');
+      }
+    }
+  }, [isOpen, initialLegacy?.id, initialTransfer?.id]);
 
   const balances = useMemo(
     () => computeAccountBalances(accounts, transactions),

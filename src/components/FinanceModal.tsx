@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownCircle, ArrowUpCircle, Calendar, Repeat, X } from 'lucide-react';
 import {
   Account,
@@ -71,16 +71,40 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
   onAddAccount,
 }) => {
   const settings = ledgerSettings[0];
-  const [type, setType] = useState<TransactionType>('expense');
-  const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
-  const [note, setNote] = useState('');
-  const [date, setDate] = useState(selectedDate);
-  const [time, setTime] = useState(nowTimeString());
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [accountId, setAccountId] = useState<string | undefined>();
-  const [recurrenceType, setRecurrenceType] = useState<FinanceRecurrenceType>('none');
-  const [recurrenceEndDate, setRecurrenceEndDate] = useState('');
+  const [type, setType] = useState<TransactionType>(() => {
+    if (initialTransaction) return initialTransaction.type === 'transfer' ? 'expense' : initialTransaction.type;
+    return initialType || 'expense';
+  });
+  const [amount, setAmount] = useState<string>(() => {
+    return initialTransaction ? String(initialTransaction.amount) : '';
+  });
+  const [category, setCategory] = useState<string>(() => {
+    if (initialTransaction) return initialTransaction.category;
+    const startType = initialType || 'expense';
+    return (
+      recentCategories(transactions, startType, 1)[0] ??
+      (startType === 'expense' ? EXPENSE_CATEGORIES[0] : INCOME_CATEGORIES[0])
+    );
+  });
+  const [note, setNote] = useState<string>(() => initialTransaction?.note || '');
+  const [date, setDate] = useState<string>(() => initialTransaction?.date || selectedDate || todayString());
+  const [time, setTime] = useState<string>(() => initialTransaction?.time || nowTimeString());
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() => {
+    if (initialTransaction?.paymentMethod) return initialTransaction.paymentMethod;
+    const acctId = initialAccountId || resolveDefaultAccountId(accounts, settings);
+    const selected = accounts.find((a) => a.id === acctId);
+    return selected?.type === 'cash' ? 'cash' : 'bank_transfer';
+  });
+  const [accountId, setAccountId] = useState<string | undefined>(() => {
+    if (initialTransaction?.accountId) return initialTransaction.accountId;
+    return initialAccountId || resolveDefaultAccountId(accounts, settings);
+  });
+  const [recurrenceType, setRecurrenceType] = useState<FinanceRecurrenceType>(() => {
+    return initialTransaction?.recurrence?.type || 'none';
+  });
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState<string>(() => {
+    return initialTransaction?.recurrence?.endDate || '';
+  });
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -97,42 +121,54 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
     [accounts, initialTransaction?.accountId]
   );
 
-  useEffect(() => {
-    if (!isOpen) return;
-    setError(null);
-    setIsSubmitting(false);
+  const prevOpenRef = useRef(isOpen);
+  const prevInitialTxIdRef = useRef<string | undefined>(initialTransaction?.id);
 
-    if (initialTransaction) {
-      setType(initialTransaction.type === 'transfer' ? 'expense' : initialTransaction.type);
-      setAmount(String(initialTransaction.amount));
-      setCategory(initialTransaction.category);
-      setNote(initialTransaction.note || '');
-      setDate(initialTransaction.date);
-      setTime(initialTransaction.time || nowTimeString());
-      setPaymentMethod(initialTransaction.paymentMethod || 'cash');
-      setAccountId(initialTransaction.accountId);
-      setRecurrenceType(initialTransaction.recurrence?.type || 'none');
-      setRecurrenceEndDate(initialTransaction.recurrence?.endDate || '');
-    } else {
-      const startType = initialType || 'expense';
-      const account = resolveDefaultAccountId(accounts, settings) || initialAccountId;
-      setType(startType);
-      setAmount('');
-      setCategory(
-        recentCategories(transactions, startType, 1)[0] ??
-          (startType === 'expense' ? EXPENSE_CATEGORIES[0] : INCOME_CATEGORIES[0])
-      );
-      setNote('');
-      // A new entry is for today; the badge on Date says when it is not.
-      setDate(todayString());
-      setTime(nowTimeString());
-      setAccountId(initialAccountId || account);
-      const selected = accounts.find((a) => a.id === (initialAccountId || account));
-      setPaymentMethod(selected?.type === 'cash' ? 'cash' : 'bank_transfer');
-      setRecurrenceType('none');
-      setRecurrenceEndDate('');
+  useEffect(() => {
+    const justOpened = !prevOpenRef.current && isOpen;
+    const txChanged = prevInitialTxIdRef.current !== initialTransaction?.id;
+    prevOpenRef.current = isOpen;
+    prevInitialTxIdRef.current = initialTransaction?.id;
+
+    if (!isOpen) return;
+
+    // Only populate or reset the form when the modal is freshly opened,
+    // or when editing a different transaction. Never wipe active user input on prop re-renders!
+    if (justOpened || txChanged) {
+      setError(null);
+      setIsSubmitting(false);
+
+      if (initialTransaction) {
+        setType(initialTransaction.type === 'transfer' ? 'expense' : initialTransaction.type);
+        setAmount(String(initialTransaction.amount));
+        setCategory(initialTransaction.category);
+        setNote(initialTransaction.note || '');
+        setDate(initialTransaction.date);
+        setTime(initialTransaction.time || nowTimeString());
+        setPaymentMethod(initialTransaction.paymentMethod || 'cash');
+        setAccountId(initialTransaction.accountId);
+        setRecurrenceType(initialTransaction.recurrence?.type || 'none');
+        setRecurrenceEndDate(initialTransaction.recurrence?.endDate || '');
+      } else if (justOpened) {
+        const startType = initialType || 'expense';
+        const account = resolveDefaultAccountId(accounts, settings) || initialAccountId;
+        setType(startType);
+        setAmount('');
+        setCategory(
+          recentCategories(transactions, startType, 1)[0] ??
+            (startType === 'expense' ? EXPENSE_CATEGORIES[0] : INCOME_CATEGORIES[0])
+        );
+        setNote('');
+        setDate(selectedDate || todayString());
+        setTime(nowTimeString());
+        setAccountId(initialAccountId || account);
+        const selected = accounts.find((a) => a.id === (initialAccountId || account));
+        setPaymentMethod(selected?.type === 'cash' ? 'cash' : 'bank_transfer');
+        setRecurrenceType('none');
+        setRecurrenceEndDate('');
+      }
     }
-  }, [initialTransaction, selectedDate, isOpen, initialType, initialAccountId, accounts, settings]);
+  }, [isOpen, initialTransaction?.id]);
 
   useEffect(() => {
     if (!accountId && selectable.length > 0) {
@@ -354,6 +390,7 @@ export const FinanceModal: React.FC<FinanceModalProps> = ({
               {(['+', '-', '×', '÷'] as const).map((operator) => (
                 <button key={operator} type="button" aria-label={`Insert ${operator}`}
                   onMouseDown={(event) => event.preventDefault()}
+                  onTouchStart={(event) => event.preventDefault()}
                   onClick={() => setAmount((value) => `${value}${operator === '×' ? '*' : operator === '÷' ? '/' : operator}`)}
                   className="min-h-9 min-w-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
                   {operator}

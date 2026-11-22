@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRightLeft, X } from 'lucide-react';
 import type { Account, FinanceTransaction, LedgerSettings } from '../../types';
 import { AccountPicker } from './AccountPicker';
@@ -37,43 +37,61 @@ export const TransferModal: React.FC<TransferModalProps> = ({
   selectedDate,
 }) => {
   const settings = ledgerSettings[0];
-  const [fromAccountId, setFromAccountId] = useState<string | undefined>();
-  const [toAccountId, setToAccountId] = useState<string | undefined>();
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(selectedDate || todayString());
-  const [time, setTime] = useState(nowTimeString());
-  const [note, setNote] = useState('');
+  const [fromAccountId, setFromAccountId] = useState<string | undefined>(() => {
+    if (initialTransfer?.accountId) return initialTransfer.accountId;
+    return resolveDefaultAccountId(accounts, settings);
+  });
+  const [toAccountId, setToAccountId] = useState<string | undefined>(() => {
+    if (initialTransfer?.destinationAccountId) return initialTransfer.destinationAccountId;
+    const from = resolveDefaultAccountId(accounts, settings);
+    return accounts.filter((a) => !a.isArchived).find((a) => a.id !== from)?.id;
+  });
+  const [amount, setAmount] = useState(() => initialTransfer ? String(initialTransfer.amount) : '');
+  const [date, setDate] = useState(() => initialTransfer?.date || selectedDate || todayString());
+  const [time, setTime] = useState(() => initialTransfer?.time || nowTimeString());
+  const [note, setNote] = useState(() => initialTransfer?.note || '');
   const [feeEnabled, setFeeEnabled] = useState(false);
   const [fee, setFee] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const prevOpenRef = useRef(isOpen);
+  const prevInitialTransferIdRef = useRef<string | undefined>(initialTransfer?.id);
+
   useEffect(() => {
+    const justOpened = !prevOpenRef.current && isOpen;
+    const transferChanged = prevInitialTransferIdRef.current !== initialTransfer?.id;
+    prevOpenRef.current = isOpen;
+    prevInitialTransferIdRef.current = initialTransfer?.id;
+
     if (!isOpen) return;
-    setError(null);
-    setIsSubmitting(false);
-    const active = accounts.filter((a) => !a.isArchived);
-    if (initialTransfer) {
-      setFromAccountId(initialTransfer.accountId);
-      setToAccountId(initialTransfer.destinationAccountId);
-      setAmount(String(initialTransfer.amount));
-      setDate(initialTransfer.date);
-      setTime(initialTransfer.time || nowTimeString());
-      setNote(initialTransfer.note || '');
-      setFeeEnabled(false);
-      setFee('');
-    } else {
-      const from = resolveDefaultAccountId(accounts, settings);
-      setFromAccountId(from);
-      setToAccountId(active.find((a) => a.id !== from)?.id);
-      setAmount('');
-      setDate(selectedDate || todayString());
-      setTime(nowTimeString());
-      setNote('');
-      setFeeEnabled(false);
-      setFee('');
+
+    if (justOpened || transferChanged) {
+      setError(null);
+      setIsSubmitting(false);
+      const active = accounts.filter((a) => !a.isArchived);
+      if (initialTransfer) {
+        setFromAccountId(initialTransfer.accountId);
+        setToAccountId(initialTransfer.destinationAccountId);
+        setAmount(String(initialTransfer.amount));
+        setDate(initialTransfer.date);
+        setTime(initialTransfer.time || nowTimeString());
+        setNote(initialTransfer.note || '');
+        setFeeEnabled(false);
+        setFee('');
+      } else if (justOpened) {
+        const from = resolveDefaultAccountId(accounts, settings);
+        setFromAccountId(from);
+        setToAccountId(active.find((a) => a.id !== from)?.id);
+        setAmount('');
+        setDate(selectedDate || todayString());
+        setTime(nowTimeString());
+        setNote('');
+        setFeeEnabled(false);
+        setFee('');
+      }
     }
-  }, [isOpen, initialTransfer, accounts, settings, selectedDate]);
+  }, [isOpen, initialTransfer?.id]);
 
   const balances = useMemo(
     () => computeAccountBalances(accounts, transactions),
