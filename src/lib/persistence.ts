@@ -313,7 +313,19 @@ export interface SyncMeta {
   cloudPushedAt?: string;
   /** Supabase user this device last synced with. A different user must not merge into it. */
   cloudUserId?: string;
+  /**
+   * Last `CLOUD_REPULL_VERSION` this device re-read the whole server for. Older
+   * devices pull everything once more (rows already here are not downloaded again).
+   */
+  cloudRepull?: number;
 }
+
+/**
+ * Raise to make every device re-read the server once. 1: savings goals and
+ * Bucket List items were left out of the merge and wiped on the device after
+ * they had been uploaded, so the cursor alone would never bring them back.
+ */
+export const CLOUD_REPULL_VERSION = 1;
 
 const TOMBSTONE_TTL_DAYS = 90;
 
@@ -331,6 +343,7 @@ export function readSyncMeta(keys: StorageKeys): SyncMeta {
     cloudCursor: meta.cloudCursor,
     cloudPushedAt: meta.cloudPushedAt,
     cloudUserId: meta.cloudUserId,
+    cloudRepull: meta.cloudRepull,
   };
 }
 
@@ -343,6 +356,7 @@ export function writeSyncMeta(keys: StorageKeys, meta: SyncMeta): void {
     cloudCursor: meta.cloudCursor,
     cloudPushedAt: meta.cloudPushedAt,
     cloudUserId: meta.cloudUserId,
+    cloudRepull: meta.cloudRepull,
   });
 }
 

@@ -161,6 +161,35 @@ describe('buildBackup / parseBackup', () => {
     expect(damaged.warnings).toEqual(['2 damaged maintenance items were left out of the restore.']);
   });
 
+  it('round-trips Bucket List items, photo and links included, and keeps them when an older file has none', () => {
+    const stamp = '2026-11-24T00:00:00.000Z';
+    const item: BackupCollections['bucketItems'][number] = {
+      id: 'bucket-1',
+      title: 'New laptop',
+      category: 'buy',
+      target: { kind: 'year', year: 2027 },
+      cost: 80000,
+      moneyGoalId: 'mgoal-1',
+      remind: true,
+      doneOn: '2026-11-23',
+      memory: 'Diwali sale',
+      photo: { id: 'photo-1', dataUrl: 'data:image/jpeg;base64,AAAA' },
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    const file = buildBackup({ ...emptyCollections(), bucketItems: [item], theme: 'light', budgetAlertState: {} });
+    const roundTrip = parseBackup(JSON.parse(JSON.stringify(file)));
+    expect(roundTrip.present).toContain('bucketItems');
+    expect(roundTrip.data.bucketItems).toEqual([item]);
+
+    // A full backup made before the Bucket List existed must not wipe the list on restore.
+    const older = JSON.parse(JSON.stringify(file));
+    delete older.bucketItems;
+    const parsedOlder = parseBackup(older);
+    expect(parsedOlder.present).not.toContain('bucketItems');
+    expect(parsedOlder.data.bucketItems).toBeUndefined();
+  });
+
   it('rejects files that are not backups', () => {
     expect(() => parseBackup(null)).toThrow(BackupError);
     expect(() => parseBackup([])).toThrow(BackupError);

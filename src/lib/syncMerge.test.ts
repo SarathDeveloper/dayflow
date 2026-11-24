@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SyncEnvelope } from './persistence';
 import { mergeCollection, mergeEnvelopes, mergeTombstones } from './syncMerge';
+import { RECORD_COLLECTIONS } from './cloudRecords';
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
@@ -82,5 +83,19 @@ describe('mergeEnvelopes', () => {
     const local = envelope([{ id: 't1', title: 'Phone task' }]);
     const remote = envelope([{ id: 't2', title: 'Desktop task' }]);
     expect(mergeEnvelopes(local, remote).data.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+  });
+});
+
+describe('mergeEnvelopes keeps every synced collection', () => {
+  // A collection missing from mergeEnvelopes is wiped on this device at the first
+  // sync after a save (this happened to moneyGoals and bucketItems).
+  it.each(RECORD_COLLECTIONS)('%s survives a merge on both sides', (collection) => {
+    const stamp = hoursAgo(1);
+    const local = envelope([]);
+    const remote = envelope([]);
+    (local.data as unknown as Record<string, unknown[]>)[collection] = [{ id: `${collection}-local`, updatedAt: stamp }];
+    (remote.data as unknown as Record<string, unknown[]>)[collection] = [{ id: `${collection}-remote`, updatedAt: stamp }];
+    const merged = mergeEnvelopes(local, remote).data as unknown as Record<string, { id: string }[]>;
+    expect(merged[collection]?.map((r) => r.id).sort()).toEqual([`${collection}-local`, `${collection}-remote`]);
   });
 });

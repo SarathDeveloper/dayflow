@@ -28,6 +28,7 @@ import {
   writeSyncMeta,
   type SyncEnvelope,
   type SyncMeta,
+  CLOUD_REPULL_VERSION,
 } from '../lib/persistence';
 import { isNative } from '../lib/platform';
 import { preferRealTaskLists } from '../lib/singleProfile';
@@ -168,6 +169,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
         cloudCursor: advanceCursor(position.cursor, metaRows),
         cloudPushedAt: startedAt,
         cloudUserId: userId,
+        cloudRepull: CLOUD_REPULL_VERSION,
       };
       if (sameSnapshot(fresh, merged)) writeMeta(patch);
       else applyEnvelope(merged, patch);
@@ -217,8 +219,10 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           const startedAt = new Date().toISOString();
 
           if (mode === 'merge') {
+            // A one-time full re-read brings back records an older version dropped.
+            const repull = (meta.cloudRepull ?? 0) < CLOUD_REPULL_VERSION;
             await mergeWithCloud(userId, startedAt, {
-              cursor: sameUser ? meta.cloudCursor : undefined,
+              cursor: sameUser && !repull ? meta.cloudCursor : undefined,
               pushedAt: sameUser ? meta.cloudPushedAt : undefined,
             });
           } else {
@@ -233,6 +237,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
                 cloudCursor: advanceCursor(undefined, metaRows),
                 cloudPushedAt: startedAt,
                 cloudUserId: userId,
+                cloudRepull: CLOUD_REPULL_VERSION,
               });
             } else if (mode === 'switch-account') {
               // The account holds nothing yet. Replacing this device with

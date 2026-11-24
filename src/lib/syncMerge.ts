@@ -161,6 +161,8 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope | null)
       remote.data.maintenanceItems ?? [],
       tombstones
     ),
+    moneyGoals: mergeCollection(local.data.moneyGoals ?? [], remote.data.moneyGoals ?? [], tombstones),
+    bucketItems: mergeCollection(local.data.bucketItems ?? [], remote.data.bucketItems ?? [], tombstones),
     billTemplates: mergeCollection(local.data.billTemplates, remote.data.billTemplates, tombstones),
     billPayments: mergeCollection(local.data.billPayments, remote.data.billPayments, tombstones),
     settings: mergeSettings(
@@ -210,6 +212,8 @@ export function isEnvelopeEmpty(envelope: SyncEnvelope | null): boolean {
       (data.diaryEntries?.length ?? 0) === 0 &&
       (data.focusSessions?.length ?? 0) === 0 &&
       (data.maintenanceItems?.length ?? 0) === 0 &&
+      (data.moneyGoals?.length ?? 0) === 0 &&
+      (data.bucketItems?.length ?? 0) === 0 &&
       data.billTemplates.length === 0 &&
       data.billPayments.length === 0)
   );
@@ -245,5 +249,7 @@ export function isValidEnvelope(value: unknown): value is SyncEnvelope {
   if (data.focusSessions !== undefined && !Array.isArray(data.focusSessions)) return false;
   if (data.maintenanceItems !== undefined && !Array.isArray(data.maintenanceItems)) return false;
   if (data.financeCategories !== undefined && !Array.isArray(data.financeCategories)) return false;
+  if (data.moneyGoals !== undefined && !Array.isArray(data.moneyGoals)) return false;
+  if (data.bucketItems !== undefined && !Array.isArray(data.bucketItems)) return false;
   return true;
 }

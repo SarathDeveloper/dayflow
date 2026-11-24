@@ -82,7 +82,9 @@ features, setup and the Android release process.
   a song this device lacks: `pickSong` then falls back to the oldest song, then
   the chime. A new collection that should sync must be added to
   `SyncData` in `lib/persistence.ts`, `RECORD_COLLECTIONS` in
-  `lib/cloudRecords.ts` and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
+  `lib/cloudRecords.ts`, `mergeEnvelopes` in `lib/syncMerge.ts` (left out, the
+  collection is wiped at the first sync after a save; `syncMerge.test.ts` checks
+  every `RECORD_COLLECTIONS` entry) and `BACKUP_ARRAY_KEYS` in `lib/backup.ts`.
 - **The password vault syncs itself and has no passphrase (account key).** It
   is not in `SyncData`: `services/passwordVault.ts` pulls and pushes its own
   rows (collection `passwordVault`: header `__vault`, one `vault-<id>` row per

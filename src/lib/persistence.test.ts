@@ -4,9 +4,12 @@ import {
   DATA_SCHEMA_VERSION,
   DEFAULT_SETTINGS,
   countRecords,
+  CLOUD_REPULL_VERSION,
   getStorageKeys,
   readSnapshot,
+  readSyncMeta,
   writeSnapshot,
+  writeSyncMeta,
   type SyncData,
   type SyncEnvelope,
 } from './persistence';
@@ -440,5 +443,14 @@ describe('sync envelopes', () => {
       envelope({ diaryEntries: [newer] }, { deviceId: 'device-b' })
     );
     expect(merged.data.diaryEntries?.[0].body).toBe('Revised');
+  });
+});
+
+describe('sync meta', () => {
+  it('keeps the one-time server re-read marker', () => {
+    const keys = getStorageKeys(null);
+    expect(readSyncMeta(keys).cloudRepull).toBeUndefined();
+    writeSyncMeta(keys, { ...readSyncMeta(keys), cloudCursor: STAMP, cloudRepull: CLOUD_REPULL_VERSION });
+    expect(readSyncMeta(keys)).toMatchObject({ cloudCursor: STAMP, cloudRepull: CLOUD_REPULL_VERSION });
   });
 });
