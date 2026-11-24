@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, DATA_SCHEMA_VERSION, getStorageKeys, type SyncData, type SyncEnvelope } from './persistence';
+import { RECORD_COLLECTIONS } from './cloudRecords';
 import {
   STARTER_TASK_IDS,
   dropUntouchedStarterTasks,
@@ -208,5 +209,39 @@ describe('starter task ids', () => {
   it('match the sample day exactly, so it never reaches a cloud merge', () => {
     const ids = getInitialTasks().map((task) => task.id).sort();
     expect(ids).toEqual([...STARTER_TASK_IDS].sort());
+  });
+});
+
+describe('migrateToSingleProfile keeps every synced collection', () => {
+  // A collection missing from the fold is left behind in the old profile keys.
+  const STAMP = '2026-02-01T00:00:00.000Z';
+  const record = (collection: string, side: string) =>
+    collection === 'maintenanceItems'
+      ? {
+          id: `${collection}-${side}`,
+          kind: 'vehicle',
+          asset: 'Bike',
+          title: 'Oil',
+          due: '2026-12-01',
+          intervalMonths: 6,
+          reminderDays: [],
+          history: [],
+          createdAt: STAMP,
+          updatedAt: STAMP,
+        }
+      : { id: `${collection}-${side}`, createdAt: STAMP, updatedAt: STAMP };
+
+  it.each(RECORD_COLLECTIONS.filter((c) => c !== 'tasks'))('%s from the old profile is folded in', (collection) => {
+    const profileId = 'usr-guard';
+    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify({ id: profileId, name: 'A', email: 'a@example.com' }));
+    const globalKey = (getStorageKeys(null) as unknown as Record<string, string>)[collection];
+    const profileKey = (getStorageKeys(profileId) as unknown as Record<string, string>)[collection];
+    localStorage.setItem(globalKey, JSON.stringify([record(collection, 'global')]));
+    localStorage.setItem(profileKey, JSON.stringify([record(collection, 'profile')]));
+
+    migrateToSingleProfile();
+
+    const merged = JSON.parse(localStorage.getItem(globalKey) as string) as { id: string }[];
+    expect(merged.map((r) => r.id).sort()).toEqual([`${collection}-global`, `${collection}-profile`]);
   });
 });
